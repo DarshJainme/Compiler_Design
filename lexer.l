@@ -25,7 +25,7 @@ DIGIT [0-9]
 LETTER [a-zA-Z]
 IDENTIFIER {LETTER}({LETTER}|{DIGIT}|_)*
 INTEGER_LITERAL {DIGIT}+
-FLOAT_LITERAL {DIGIT}+\.{DIGIT}*([exE][+-]?{DIGIT}+)?|\.{DIGIT}+([eE][+-]?{DIGIT}+)?|{DIGIT}+[eE][+-]?{DIGIT}+
+FLOAT_LITERAL {DIGIT}+\.{DIGIT}*([eE][+-]?{DIGIT}+)?|\.{DIGIT}+([eE][+-]?{DIGIT}+)?|{DIGIT}+[eE][+-]?{DIGIT}+
 CHAR_LITERAL '(\\.|[^'\\])'
 STRING_LITERAL \"(\\.|[^"\\])*\"
 WHITESPACE [ \t\r]+
@@ -136,5 +136,6 @@ NEWLINE \n
 
 /* Error Handling Rule */
 .               { report_error(yytext); }
+
 
 %%
