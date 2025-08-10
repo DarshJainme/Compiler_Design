@@ -1,6 +1,8 @@
 %{
     #include <stdio.h>
     #include <string.h>
+    #include <limits.h>
+    #include <stdlib.h>
     #include "tokens.h"
 
     // Counter for errors
@@ -10,6 +12,18 @@
     extern char* yytext;
     extern int yylineno;
     extern FILE* yyin;
+
+    // Helper function to check integer overflow
+    int check_integer_overflow(const char* str) {
+        char* endptr;
+        long val = strtol(str, &endptr, 10);
+        return (val > INT_MAX || val < INT_MIN || *endptr != '\0');
+    }
+
+    // Helper function to check identifier length
+    int check_identifier_length(const char* str) {
+        return strlen(str) > 255; // Common limit for identifiers
+    }
 %}
 
 %option yylineno
@@ -27,6 +41,10 @@ FLOAT_LITERAL ({DIGIT}+\.{DIGIT}*{EXPONENTIAL_PART}?|\.{DIGIT}+{EXPONENTIAL_PART
 STRING_LITERAL \"(\\.|[^\"\\])*\"
 WHITESPACE [ \t\r]+
 NEWLINE \n
+
+INVALID_IDENTIFIER_START {DIGIT}({LETTER}|{DIGIT})*
+INVALID_NUMBER {DIGIT}+[a-zA-Z_]+{DIGIT}*
+INVALID_CHAR_IN_NUMBER {DIGIT}+[$@#%&*!^~`]({DIGIT}|[a-zA-Z_])*
 
 %%
 
@@ -84,7 +102,14 @@ NEWLINE \n
 "true"          { return KEYWORD_TRUE; }
 "false"         { return KEYWORD_FALSE; }
 
-{INTEGER_LITERAL}               { return INTEGER_LITERAL; }
+{INTEGER_LITERAL}               { 
+    if (check_integer_overflow(yytext)) {
+        fprintf(stderr, "Lexical Error at line %d: Integer constant '%s' exceeds maximum value\n", yylineno, yytext);
+        num_errors++;
+        return ERROR_TOKEN;
+    }
+    return INTEGER_LITERAL; 
+}
 {FLOAT_LITERAL}                 { return FLOAT_LITERAL; }
 {CHAR_LITERAL}                  { return CHAR_LITERAL; }
 {STRING_LITERAL}                { return STRING_LITERAL; }
@@ -93,8 +118,38 @@ NEWLINE \n
     num_errors++;
     return ERROR_TOKEN;
 }
+'[^']*$                         {
+    fprintf(stderr, "Lexical Error at line %d: Unterminated character literal\n", yylineno);
+    num_errors++;
+    return ERROR_TOKEN;
+}
 
-{IDENTIFIER}                    { return IDENTIFIER; }
+{INVALID_IDENTIFIER_START}      {
+    fprintf(stderr, "Lexical Error at line %d: Invalid identifier '%s' - identifiers cannot start with a digit\n", yylineno, yytext);
+    num_errors++;
+    return ERROR_TOKEN;
+}
+
+{INVALID_NUMBER}                {
+    fprintf(stderr, "Lexical Error at line %d: Invalid numeric constant '%s' - contains alphabetic characters\n", yylineno, yytext);
+    num_errors++;
+    return ERROR_TOKEN;
+}
+
+{INVALID_CHAR_IN_NUMBER}        {
+    fprintf(stderr, "Lexical Error at line %d: Invalid numeric constant '%s' - contains illegal characters\n", yylineno, yytext);
+    num_errors++;
+    return ERROR_TOKEN;
+}
+
+{IDENTIFIER}                    { 
+    if (check_identifier_length(yytext)) {
+        fprintf(stderr, "Lexical Error at line %d: Identifier '%s' exceeds maximum length (255 characters)\n", yylineno, yytext);
+        num_errors++;
+        return ERROR_TOKEN;
+    }
+    return IDENTIFIER; 
+}
 
 "++"            { return OP_INCREMENT; }
 "--"            { return OP_DECREMENT; }
@@ -137,8 +192,14 @@ NEWLINE \n
 ":"             { return COLON; }
 "."             { return DOT; }
 
+[$@#`\\]           { 
+    fprintf(stderr, "Lexical Error at line %d: Illegal character '%s'\n", yylineno, yytext);
+    num_errors++;
+    return ERROR_TOKEN;
+}
+
 .               { 
-    fprintf(stderr, "Lexical error at line %d: Invalid token '%s'\n", yylineno, yytext);
+    fprintf(stderr, "Lexical Error at line %d: Invalid token '%s'\n", yylineno, yytext);
     num_errors++;
     return ERROR_TOKEN;
 }
