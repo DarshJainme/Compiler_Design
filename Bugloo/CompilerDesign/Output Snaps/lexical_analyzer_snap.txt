@@ -1,4 +1,7 @@
 Running Lexical Analyzer on all test cases...
+Output will be saved to test_results.txt
+==================================================
+Running Lexical Analyzer on all test cases...
 ==================================================
 
 Testing: simple_test.c
@@ -20,6 +23,7 @@ Lexical analysis completed successfully.
 
 Testing: test1_basic.c
 ----------------------------------------
+Lexical Error at line 5: Invalid identifier '1a' - identifiers cannot start with a digit
 Lexeme                    Token
 ----------------------------------------
 int                       KEYWORD_INT
@@ -43,8 +47,6 @@ c                         IDENTIFIER
 'A'                       CHAR_LITERAL
 ;                         SEMICOLON
 int                       KEYWORD_INT
-1                         INTEGER_LITERAL
-a                         IDENTIFIER
 =                         OP_ASSIGN
 5                         INTEGER_LITERAL
 ;                         SEMICOLON
@@ -69,7 +71,7 @@ return                    KEYWORD_RETURN
 ;                         SEMICOLON
 }                         CLOSE_CURLY_BRACKET
 
-Lexical analysis completed successfully.
+Lexical analysis failed with 1 errors.
 
 
 Testing: test2_operators.c
@@ -686,6 +688,18 @@ Lexical analysis completed successfully.
 
 Testing: test7_errors1.c
 ----------------------------------------
+Lexical Error at line 18: Integer constant '2147483648' exceeds maximum value
+Lexical Error at line 21: Illegal character '@'
+Lexical Error at line 22: Illegal character '#'
+Lexical Error at line 22: Illegal character '$'
+Lexical Error at line 23: Invalid numeric constant '12$34' - contains illegal characters
+Lexical Error at line 24: Illegal character '$'
+Lexical Error at line 25: Invalid token '''
+Lexical Error at line 25: Illegal character '@'
+Lexical Error at line 39: Unterminated character literal
+Lexical Error at line 44: Illegal character '$'
+
+Lexical analysis failed with 10 errors.
 Lexeme                    Token
 ----------------------------------------
 #include <iostream>       PREPROCESSOR_DIRECTIVE
@@ -755,13 +769,29 @@ printf                    IDENTIFIER
 "Jumped to label\n"       STRING_LITERAL
 )                         CLOSE_PARENTHESIS
 ;                         SEMICOLON
+int                       KEYWORD_INT
+overflow                  IDENTIFIER
+=                         OP_ASSIGN
+;                         SEMICOLON
 invalidToken              IDENTIFIER
 !                         OP_LOGICAL_NOT
 weird                     IDENTIFIER
 token                     IDENTIFIER
-123                       INTEGER_LITERAL
-abc                       IDENTIFIER
+int                       KEYWORD_INT
+x                         IDENTIFIER
+=                         OP_ASSIGN
+;                         SEMICOLON
 money                     IDENTIFIER
+char                      KEYWORD_CHAR
+ch                        IDENTIFIER
+=                         OP_ASSIGN
+A                         IDENTIFIER
+float                     KEYWORD_FLOAT
+bad_float                 IDENTIFIER
+=                         OP_ASSIGN
+3.14                      FLOAT_LITERAL
+5                         INTEGER_LITERAL
+;                         SEMICOLON
 ^                         OP_BITWISE_XOR
 ^                         OP_BITWISE_XOR
 ^                         OP_BITWISE_XOR
@@ -773,7 +803,12 @@ return                    KEYWORD_RETURN
 
 Testing: test8_errors.c
 ----------------------------------------
-Lexeme                    Token
+Lexical Error at line 6: Illegal character '@'
+Lexical Error at line 7: Illegal character '$'
+Lexical Error at line 14: Unterminated character literal
+Lexical Error at line 37: Unterminated character literal
+
+Lexical analysis failed with Lexeme                    Token
 ----------------------------------------
 int                       KEYWORD_INT
 main                      IDENTIFIER
@@ -790,11 +825,113 @@ bad_token                 IDENTIFIER
 =                         OP_ASSIGN
 5                         INTEGER_LITERAL
 ;                         SEMICOLON
+int                       KEYWORD_INT
+another                   IDENTIFIER
+=                         OP_ASSIGN
+10                        INTEGER_LITERAL
+;                         SEMICOLON
 char                      KEYWORD_CHAR
 *                         OP_MULTIPLY
 unterminated              IDENTIFIER
 =                         OP_ASSIGN
+"this string never ends;
+    char* another_bad = " STRING_LITERAL
+missing                   IDENTIFIER
+quote                     IDENTIFIER
+at                        IDENTIFIER
+end                       IDENTIFIER
+;                         SEMICOLON
+char                      KEYWORD_CHAR
+bad_char                  IDENTIFIER
+=                         OP_ASSIGN
+char                      KEYWORD_CHAR
+missing_quote             IDENTIFIER
+=                         OP_ASSIGN
+4 errors.
+
+
+Testing: test9_comprehensive_errors.c
+----------------------------------------
+Lexical Error at line 8: Integer constant '2147483648' exceeds maximum value
+Lexical Error at line 9: Integer constant '9999999999999' exceeds maximum value
+Lexical Error at line 10: Integer constant '2147483649' exceeds maximum value
+Lexical Error at line 13: Illegal character '@'
+Lexical Error at line 14: Illegal character '$'
+Lexical Error at line 15: Illegal character '#'
+Lexical Error at line 16: Illegal character '`'
+Lexical Error at line 16: Illegal character '`'
+Lexical Error at line 17: Illegal character '\'
+Lexical Error at line 17: Illegal character '\'
+Lexical Error at line 22: Unterminated character literal
+Lexical Error at line 53: Unterminated character literal
+
+Lexical analysis failed with Lexeme                    Token
+----------------------------------------
+#include <stdio.h>        PREPROCESSOR_DIRECTIVE
+int                       KEYWORD_INT
+main                      IDENTIFIER
+(                         OPEN_PARENTHESIS
+)                         CLOSE_PARENTHESIS
+{                         OPEN_CURLY_BRACKET
+int                       KEYWORD_INT
+overflow1                 IDENTIFIER
+=                         OP_ASSIGN
+;                         SEMICOLON
+int                       KEYWORD_INT
+overflow2                 IDENTIFIER
+=                         OP_ASSIGN
+;                         SEMICOLON
+int                       KEYWORD_INT
+underflow                 IDENTIFIER
+=                         OP_ASSIGN
+-                         OP_MINUS
+;                         SEMICOLON
+illegal_at_symbol         IDENTIFIER
+;                         SEMICOLON
+dollar_sign_error         IDENTIFIER
+;                         SEMICOLON
+hash_in_middle_of_code    IDENTIFIER
+;                         SEMICOLON
+backtick_error            IDENTIFIER
+;                         SEMICOLON
+backslash_error           IDENTIFIER
+;                         SEMICOLON
+char                      KEYWORD_CHAR
+*                         OP_MULTIPLY
+bad_string1               IDENTIFIER
+=                         OP_ASSIGN
+"This string is never closed;
+    char* bad_string2 = " STRING_LITERAL
+Another                   IDENTIFIER
+unclosed                  IDENTIFIER
+string                    IDENTIFIER
+char                      KEYWORD_CHAR
+bad_char1                 IDENTIFIER
+=                         OP_ASSIGN
+char                      KEYWORD_CHAR
+bad_char2                 IDENTIFIER
+=                         OP_ASSIGN
+char                      KEYWORD_CHAR
+valid_char                IDENTIFIER
+=                         OP_ASSIGN
+'A'                       CHAR_LITERAL
+;                         SEMICOLON
+char                      KEYWORD_CHAR
+*                         OP_MULTIPLY
+valid_string              IDENTIFIER
+=                         OP_ASSIGN
+"This is a proper string" STRING_LITERAL
+;                         SEMICOLON
+float                     KEYWORD_FLOAT
+valid_float               IDENTIFIER
+=                         OP_ASSIGN
+3.14159                   FLOAT_LITERAL
+;                         SEMICOLON
+return                    KEYWORD_RETURN
+0                         INTEGER_LITERAL
+;                         SEMICOLON
 }                         CLOSE_CURLY_BRACKET
+12 errors.
 
 ==================================================
 All tests completed.
