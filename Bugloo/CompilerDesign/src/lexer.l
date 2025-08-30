@@ -4,6 +4,7 @@
     #include <limits.h>
     #include <stdlib.h>
     #include "tokens.h"
+    #include "y.tab.h"
 
     // Counter for errors
     int num_errors = 0;
@@ -43,7 +44,6 @@ WHITESPACE [ \t\r]+
 NEWLINE \n
 
 INVALID_IDENTIFIER_START {DIGIT}({LETTER}|{DIGIT})*
-INVALID_NUMBER {DIGIT}+[a-zA-Z_]+{DIGIT}*
 INVALID_CHAR_IN_NUMBER {DIGIT}+[$@#%&*!^~`]({DIGIT}|[a-zA-Z_])*
 
 %%
@@ -126,12 +126,6 @@ INVALID_CHAR_IN_NUMBER {DIGIT}+[$@#%&*!^~`]({DIGIT}|[a-zA-Z_])*
 
 {INVALID_IDENTIFIER_START}      {
     fprintf(stderr, "Lexical Error at line %d: Invalid identifier '%s' - identifiers cannot start with a digit\n", yylineno, yytext);
-    num_errors++;
-    return ERROR_TOKEN;
-}
-
-{INVALID_NUMBER}                {
-    fprintf(stderr, "Lexical Error at line %d: Invalid numeric constant '%s' - contains alphabetic characters\n", yylineno, yytext);
     num_errors++;
     return ERROR_TOKEN;
 }
