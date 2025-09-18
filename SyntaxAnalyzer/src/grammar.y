@@ -97,7 +97,6 @@ data_type get_type_from_string(const char* type_str) {
 %token <fval> FLOAT_LITERAL
 %token <cval> CHAR_LITERAL
 %token <sval> STRING_LITERAL IDENTIFIER
-%token NUMBER CHARACTER STRING
 %token IF ELSE WHILE FOR DO SWITCH CASE DEFAULT BREAK CONTINUE RETURN GOTO
 %token PRINTF SCANF STATIC STRUCT TYPEDEF
 %token INT CHAR FLOAT_TYPE DOUBLE VOID
@@ -263,7 +262,6 @@ function_definition : type_specifier IDENTIFIER LPAREN parameter_list RPAREN
     }
     compound_statement
     {
-        // Bug Fix: Added the missing line to exit the scope
         current_scope = current_scope->parent;
 
         $$ = create_ast_node(NODE_FUNCTION, $2, yylineno);
@@ -274,6 +272,16 @@ function_definition : type_specifier IDENTIFIER LPAREN parameter_list RPAREN
             sym->is_function_defined = 1;
             insert_symbol(current_scope, sym);
         }
+    };
+    | type_specifier IDENTIFIER SCOPE IDENTIFIER LPAREN parameter_list RPAREN
+    {
+        // Rule for: type ClassName::FunctionName(params) { ... }
+        // This is a placeholder for your AST logic for out-of-class definitions.
+        $$ = create_ast_node(NODE_FUNCTION_DEF, NULL, yylineno);
+    }
+    compound_statement
+    {
+        add_ast_child($$, $8);
     };
 
 parameter_list: parameter { $$ = $1; }
@@ -398,6 +406,8 @@ type_specifier  : INT { $$ = create_ast_node(NODE_TYPE, "int", yylineno); }
                 | FLOAT_TYPE { $$ = create_ast_node(NODE_TYPE, "float", yylineno); }
                 | DOUBLE { $$ = create_ast_node(NODE_TYPE, "double", yylineno); }
                 | VOID { $$ = create_ast_node(NODE_TYPE, "void", yylineno); }
+                | STRUCT IDENTIFIER { $$ = create_ast_node(NODE_TYPE, $2, yylineno); }
+                | CLASS IDENTIFIER { $$ = create_ast_node(NODE_TYPE, $2, yylineno); }
                 | struct_declaration { $$ = $1; }
                 | class_declaration { $$ = $1; };
 
@@ -729,7 +739,10 @@ postfix_expression : primary_expression { $$ = $1; }
                 ;
 
 primary_expression : IDENTIFIER {
-                    $$ = create_identifier_expression($1);
+                    $$ = create_ast_node(NODE_IDENTIFIER, $1, yylineno);
+                }
+                | IDENTIFIER SCOPE IDENTIFIER {
+                    $$ = create_ast_node(NODE_SCOPED_ACCESS, NULL, yylineno);
                 }
                 | INTEGER_LITERAL {
                     $$ = create_integer_literal($1);
