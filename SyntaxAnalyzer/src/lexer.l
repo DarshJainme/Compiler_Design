@@ -76,7 +76,7 @@ MULTI_COMMENT_START "/*"
 
 "int"           { TOKEN(INT); }
 "char"          { TOKEN(CHAR); }
-"float"         { TOKEN(FLOAT_TYPE); }
+"float"         { TOKEN(FLOAT); }
 "double"        { TOKEN(DOUBLE); }
 "void"          { TOKEN(VOID); }
 

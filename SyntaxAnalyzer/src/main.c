@@ -45,7 +45,7 @@ const char* get_token_name(int token_type) {
         case TYPEDEF: return "TYPEDEF";
         case INT: return "INT";
         case CHAR: return "CHAR";
-        case FLOAT_TYPE: return "FLOAT_TYPE";
+        case FLOAT: return "FLOAT";
         case DOUBLE: return "DOUBLE";
         case VOID: return "VOID";
         case CLASS: return "CLASS";

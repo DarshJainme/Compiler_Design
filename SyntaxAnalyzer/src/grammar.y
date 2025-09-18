@@ -99,7 +99,7 @@ data_type get_type_from_string(const char* type_str) {
 %token <sval> STRING_LITERAL IDENTIFIER
 %token IF ELSE WHILE FOR DO SWITCH CASE DEFAULT BREAK CONTINUE RETURN GOTO
 %token PRINTF SCANF STATIC STRUCT TYPEDEF
-%token INT CHAR FLOAT_TYPE DOUBLE VOID
+%token INT CHAR FLOAT DOUBLE VOID
 %token CLASS PUBLIC PRIVATE PROTECTED VIRTUAL OVERRIDE NEW DELETE THIS
 %token LAMBDA AUTO MALLOC FREE
 %token PLUS MINUS MULTIPLY DIVIDE MODULO INCREMENT DECREMENT
@@ -403,7 +403,7 @@ typedef_declaration:
 
 type_specifier  : INT { $$ = create_ast_node(NODE_TYPE, "int", yylineno); }
                 | CHAR { $$ = create_ast_node(NODE_TYPE, "char", yylineno); }
-                | FLOAT_TYPE { $$ = create_ast_node(NODE_TYPE, "float", yylineno); }
+                | FLOAT { $$ = create_ast_node(NODE_TYPE, "float", yylineno); }
                 | DOUBLE { $$ = create_ast_node(NODE_TYPE, "double", yylineno); }
                 | VOID { $$ = create_ast_node(NODE_TYPE, "void", yylineno); }
                 | STRUCT IDENTIFIER { $$ = create_ast_node(NODE_TYPE, $2, yylineno); }
