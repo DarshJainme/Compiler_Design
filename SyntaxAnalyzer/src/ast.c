@@ -769,5 +769,3 @@ void print_ast_to_file(ast_node *node, int depth, FILE *file) {
             break;
     }
 }
-
-
