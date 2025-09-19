@@ -88,7 +88,6 @@ MULTI_COMMENT_START "/*"
 "delete"        { TOKEN(DELETE); }
 "this"          { TOKEN(THIS); }
 
-"lambda"        { TOKEN(LAMBDA); }
 "auto"          { TOKEN(AUTO); }
 "malloc"        { TOKEN(MALLOC); }
 "free"          { TOKEN(FREE); }

@@ -101,7 +101,7 @@ data_type get_type_from_string(const char* type_str) {
 %token STATIC STRUCT TYPEDEF
 %token INT CHAR FLOAT DOUBLE VOID
 %token CLASS PUBLIC PRIVATE PROTECTED VIRTUAL OVERRIDE NEW DELETE THIS
-%token LAMBDA AUTO MALLOC FREE
+%token AUTO MALLOC FREE
 %token PLUS MINUS MULTIPLY DIVIDE MODULO INCREMENT DECREMENT
 %token ASSIGN PLUS_ASSIGN MINUS_ASSIGN MULT_ASSIGN DIV_ASSIGN
 %token EQUAL NOT_EQUAL LESS_THAN GREATER_THAN LESS_EQUAL GREATER_EQUAL
@@ -817,9 +817,6 @@ primary_expression : IDENTIFIER {
                 }
                 | THIS {
                     $$ = create_this_expression();
-                }
-                | LAMBDA LPAREN parameter_list RPAREN LBRACE statement_list RBRACE {
-                    $$ = create_lambda_expression(NULL, $3, $6);
                 }
                 | LPAREN error RPAREN {
                     yyerror("Invalid expression in parentheses");

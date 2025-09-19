@@ -356,13 +356,6 @@ typedef union node_data {
         char *access_type;
     } access_specifier;
     
-    /* Lambda expression */
-    struct {
-        ast_node *capture_list;
-        ast_node *parameters;
-        ast_node *body;
-    } lambda_expr;
-    
     /* New expression */
     struct {
         ast_node *type;

@@ -55,7 +55,6 @@ const char* get_token_name(int token_type) {
         case NEW: return "NEW";
         case DELETE: return "DELETE";
         case THIS: return "THIS";
-        case LAMBDA: return "LAMBDA";
         case AUTO: return "AUTO";
         case MALLOC: return "MALLOC";
         case FREE: return "FREE";
