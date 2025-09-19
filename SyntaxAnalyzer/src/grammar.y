@@ -495,6 +495,11 @@ non_if_statement
 selection_statement
     : matched_stmt
     | unmatched_stmt
+    | SWITCH LPAREN expression RPAREN statement {
+        $$ = create_ast_node(NODE_SWITCH_STATEMENT, NULL, yylineno);
+        add_ast_child($$, $3); /* expression */
+        add_ast_child($$, $5); /* statement */
+    }
     ;
 
 /* matched-stmt: if with an else already matched, or any non-if statement */
@@ -570,6 +575,9 @@ jump_statement  : RETURN expression SEMICOLON {
                 }
                 | CONTINUE SEMICOLON {
                     $$ = create_ast_node(NODE_CONTINUE, NULL, yylineno);
+                }
+                | GOTO IDENTIFIER SEMICOLON {
+                    $$ = create_goto_statement($2);
                 }
                 ;
 
@@ -723,6 +731,18 @@ unary_expression : postfix_expression { $$ = $1; }
                 }
                 | DECREMENT unary_expression %prec PREFIX_DEC {
                     $$ = create_ast_node(NODE_UNARY, "--", yylineno);
+                    add_ast_child($$, $2);
+                }
+                | LOGICAL_NOT unary_expression {
+                    $$ = create_ast_node(NODE_UNARY, "!", yylineno);
+                    add_ast_child($$, $2);
+                }
+                | MINUS unary_expression %prec UMINUS {
+                    $$ = create_ast_node(NODE_UNARY, "-", yylineno);
+                    add_ast_child($$, $2);
+                }
+                | PLUS unary_expression %prec UPLUS {
+                    $$ = create_ast_node(NODE_UNARY, "+", yylineno);
                     add_ast_child($$, $2);
                 }
                 | MULTIPLY unary_expression {
