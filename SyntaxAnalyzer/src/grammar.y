@@ -274,14 +274,22 @@ function_definition : type_specifier IDENTIFIER LPAREN parameter_list RPAREN
         }
     };
     | type_specifier IDENTIFIER SCOPE IDENTIFIER LPAREN parameter_list RPAREN
-    {
-        // Rule for: type ClassName::FunctionName(params) { ... }
-        // This is a placeholder for your AST logic for out-of-class definitions.
-        $$ = create_ast_node(NODE_FUNCTION_DEF, NULL, yylineno);
-    }
     compound_statement
     {
-        add_ast_child($$, $8);
+        // Rule for: type ClassName::FunctionName(params) { ... }
+        // Create the node in the final action block.
+        // All components are available here.
+        // $1=type_specifier, $2=ClassName, $4=FunctionName, $6=param_list, $8=compound_statement
+        ast_node* func_def_node = create_ast_node(NODE_SCOPED_FUNCTION_DEFINITION, NULL, yylineno);
+
+        add_ast_child(func_def_node, $1);
+        ast_node* scoped_name = create_ast_node(NODE_SCOPED_ACCESS, NULL, yylineno);
+        add_ast_child(scoped_name, create_ast_node(NODE_IDENTIFIER, $2, yylineno));
+        add_ast_child(scoped_name, create_ast_node(NODE_IDENTIFIER, $4, yylineno));
+        add_ast_child(func_def_node, scoped_name);
+        add_ast_child(func_def_node, $6);
+        add_ast_child(func_def_node, $8);
+        $$ = func_def_node;
     };
 
 parameter_list: parameter { $$ = $1; }
