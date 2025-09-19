@@ -113,6 +113,7 @@ data_type get_type_from_string(const char* type_str) {
 %type <node> program translation_unit external_declaration function_declaration function_definition
 %type <node> variable_declaration array_declaration class_declaration struct_declaration typedef_declaration
 %type <node> declaration statement_list statement compound_statement expression_statement
+%type <node> non_if_statement matched_stmt unmatched_stmt
 %type <node> selection_statement iteration_statement jump_statement labeled_statement expression
 %type <node> assignment_expression logical_or_expression logical_and_expression equality_expression
 %type <node> relational_expression additive_expression multiplicative_expression unary_expression
@@ -483,18 +484,57 @@ expression_statement : expression SEMICOLON {
                 };
 
 /* Control structures */
-selection_statement : IF LPAREN expression RPAREN statement {
-                    $$ = create_ast_node(NODE_IF, NULL, yylineno);
-                    add_ast_child($$, $3);
-                    add_ast_child($$, $5);
-                }
-                | IF LPAREN expression RPAREN statement ELSE statement {
-                    $$ = create_ast_node(NODE_IF, NULL, yylineno);
-                    add_ast_child($$, $3);
-                    add_ast_child($$, $5);
-                    add_ast_child($$, $7);
-                }
-                ;
+/* non_if_statement = "others" (all statements that are NOT an if) */
+non_if_statement
+    : expression_statement           { $$ = $1; }
+    | compound_statement             { $$ = $1; }
+    | iteration_statement            { $$ = $1; }
+    | jump_statement                 { $$ = $1; }
+    | declaration                    { $$ = $1; }
+    | labeled_statement              { $$ = $1; }
+    ;
+
+/* selection_statement delegates to matched/unmatched forms */
+selection_statement
+    : matched_stmt
+    | unmatched_stmt
+    ;
+
+/* matched-stmt: if with an else already matched, or any non-if statement */
+matched_stmt
+    : IF LPAREN expression RPAREN matched_stmt ELSE matched_stmt
+        {
+            $$ = create_ast_node(NODE_IF, NULL, yylineno);
+            /* $3 = condition, $5 = then, $7 = else */
+            add_ast_child($$, $3);
+            add_ast_child($$, $5);
+            add_ast_child($$, $7);
+        }
+    | non_if_statement
+        {
+            $$ = $1;
+        }
+    ;
+
+/* unmatched-stmt: an if that does not (yet) have an else attached */
+unmatched_stmt
+    : IF LPAREN expression RPAREN statement
+        {
+            /* if (cond) stmt   -- no else branch */
+            $$ = create_ast_node(NODE_IF, NULL, yylineno);
+            add_ast_child($$, $3);   /* cond */
+            add_ast_child($$, $5);   /* then (stmt) */
+            /* no else child added */
+        }
+    | IF LPAREN expression RPAREN matched_stmt ELSE unmatched_stmt
+        {
+            /* handles nested cases where else attaches to nearest if */
+            $$ = create_ast_node(NODE_IF, NULL, yylineno);
+            add_ast_child($$, $3);   /* cond */
+            add_ast_child($$, $5);   /* then (matched_stmt) */
+            add_ast_child($$, $7);   /* else (unmatched_stmt) */
+        }
+    ;
 
 iteration_statement : WHILE LPAREN expression RPAREN statement {
                     $$ = create_ast_node(NODE_WHILE, NULL, yylineno);
