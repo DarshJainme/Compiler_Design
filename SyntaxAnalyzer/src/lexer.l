@@ -68,8 +68,6 @@ MULTI_COMMENT_START "/*"
 "return"        { TOKEN(RETURN); }
 "goto"          { TOKEN(GOTO); }
 
-"printf"        { TOKEN(PRINTF); }
-"scanf"         { TOKEN(SCANF); }
 "static"        { TOKEN(STATIC); }
 "struct"        { TOKEN(STRUCT); }
 "typedef"       { TOKEN(TYPEDEF); }

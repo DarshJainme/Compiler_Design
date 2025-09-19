@@ -38,8 +38,6 @@ const char* get_token_name(int token_type) {
         case CONTINUE: return "CONTINUE";
         case RETURN: return "RETURN";
         case GOTO: return "GOTO";
-        case PRINTF: return "PRINTF";
-        case SCANF: return "SCANF";
         case STATIC: return "STATIC";
         case STRUCT: return "STRUCT";
         case TYPEDEF: return "TYPEDEF";

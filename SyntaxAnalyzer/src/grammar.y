@@ -98,7 +98,7 @@ data_type get_type_from_string(const char* type_str) {
 %token <cval> CHAR_LITERAL
 %token <sval> STRING_LITERAL IDENTIFIER
 %token IF ELSE WHILE FOR DO SWITCH CASE DEFAULT BREAK CONTINUE RETURN GOTO
-%token PRINTF SCANF STATIC STRUCT TYPEDEF
+%token STATIC STRUCT TYPEDEF
 %token INT CHAR FLOAT DOUBLE VOID
 %token CLASS PUBLIC PRIVATE PROTECTED VIRTUAL OVERRIDE NEW DELETE THIS
 %token LAMBDA AUTO MALLOC FREE
@@ -818,12 +818,6 @@ primary_expression : IDENTIFIER {
                 | THIS {
                     $$ = create_this_expression();
                 }
-                | PRINTF LPAREN argument_list RPAREN {
-                    $$ = create_printf_call($3);
-                }
-                | SCANF LPAREN argument_list RPAREN {
-                    $$ = create_scanf_call($3);
-                }
                 | LAMBDA LPAREN parameter_list RPAREN LBRACE statement_list RBRACE {
                     $$ = create_lambda_expression(NULL, $3, $6);
                 }
@@ -832,17 +826,6 @@ primary_expression : IDENTIFIER {
                     yyerrok;
                     $$ = NULL;
                 }
-                | PRINTF LPAREN error RPAREN {
-                    yyerror("Invalid printf arguments");
-                    yyerrok;
-                    $$ = NULL;
-                }
-                | SCANF LPAREN error RPAREN {
-                    yyerror("Invalid scanf arguments");
-                    yyerrok;
-                    $$ = NULL;
-                }
-                ;
 
 argument_list: assignment_expression {
                 $$ = create_argument_list($1);
