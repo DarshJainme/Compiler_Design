@@ -120,8 +120,13 @@ data_type get_type_from_string(const char* type_str) {
 %type <node> parameter type_specifier declarator member_declaration_list member_declaration
 %type <node> member_list member access_specifier
 
-%right ASSIGN PLUS_ASSIGN MINUS_ASSIGN MULT_ASSIGN DIV_ASSIGN
+/* assignments */
+%right ASSIGN PLUS_ASSIGN MINUS_ASSIGN MULT_ASSIGN DIV_ASSIGN MOD_ASSIGN
+
+/* ternary */
 %right '?' ':'
+
+/* logical/bitwise/equality/relational/shift/add/mul*/
 %left LOGICAL_OR
 %left LOGICAL_AND
 %left BITWISE_OR
@@ -132,8 +137,11 @@ data_type get_type_from_string(const char* type_str) {
 %left LEFT_SHIFT RIGHT_SHIFT
 %left PLUS MINUS
 %left MULTIPLY DIVIDE MODULO
-%right LOGICAL_NOT BITWISE_NOT INCREMENT DECREMENT UMINUS UPLUS
-%left DOT ARROW LBRACKET RBRACKET LPAREN RPAREN
+/* unary */
+%right LOGICAL_NOT BITWISE_NOT UMINUS UPLUS PREFIX_INC PREFIX_DEC
+
+/* postfix */
+%left POSTFIX_INC POSTFIX_DEC DOT ARROW LPAREN LBRACKET
 
 %%
 
@@ -672,11 +680,11 @@ multiplicative_expression : unary_expression { $$ = $1; }
                 ;
 
 unary_expression : postfix_expression { $$ = $1; }
-                | INCREMENT unary_expression {
+                | INCREMENT unary_expression %prec PREFIX_INC {
                     $$ = create_ast_node(NODE_UNARY, "++", yylineno);
                     add_ast_child($$, $2);
                 }
-                | DECREMENT unary_expression {
+                | DECREMENT unary_expression %prec PREFIX_DEC {
                     $$ = create_ast_node(NODE_UNARY, "--", yylineno);
                     add_ast_child($$, $2);
                 }
@@ -728,10 +736,10 @@ postfix_expression : primary_expression { $$ = $1; }
                 | postfix_expression ARROW IDENTIFIER {
                     $$ = create_member_access($1, $3, 1);
                 }
-                | postfix_expression INCREMENT {
+                | postfix_expression INCREMENT %prec POSTFIX_INC {
                     $$ = create_unary_expression($1, "++", 0);
                 }
-                | postfix_expression DECREMENT {
+                | postfix_expression DECREMENT %prec POSTFIX_DEC {
                     $$ = create_unary_expression($1, "--", 0);
                 }
                 | postfix_expression LPAREN error RPAREN {
