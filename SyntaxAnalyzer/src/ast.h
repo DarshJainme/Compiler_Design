@@ -128,6 +128,8 @@ typedef union node_data {
         char *name;
         ast_node *parameters;
         ast_node *body;
+        int is_virtual;
+        int is_override;
     } function;
     
     /* Variable */
@@ -145,6 +147,7 @@ typedef union node_data {
         char *name;
         char *base_class;
         ast_node *members;
+        int is_virtual_inheritance;
     } class_decl;
     
     /* Struct declaration */
@@ -395,6 +398,7 @@ ast_node *append_declaration(ast_node *list, ast_node *declaration);
 
 /* Function nodes */
 ast_node *create_function_declaration(ast_node *return_type, char *name, ast_node *parameters);
+ast_node *create_virtual_function_declaration(ast_node *return_type, char *name, ast_node *parameters, int is_override); // Add this
 ast_node *create_function_definition(ast_node *return_type, char *name, ast_node *parameters, ast_node *body);
 
 /* Variable nodes */
@@ -404,7 +408,7 @@ ast_node *create_array_declaration(ast_node *type, char *name, int size, int dim
 ast_node *create_multidimensional_array_declaration(ast_node *type, char *name, int size1, int size2);
 
 /* Class and struct nodes */
-ast_node *create_class_declaration(char *name, char *base_class, ast_node *members);
+ast_node *create_class_declaration(char *name, char *base_class, ast_node *members, int is_virtual_inheritance);
 ast_node *create_struct_declaration(char *name, ast_node *members);
 ast_node *create_typedef_node(ast_node *type, char *name);
 

@@ -100,6 +100,17 @@ ast_node *create_function_declaration(ast_node *return_type, char *name, ast_nod
         node->data.function.name = my_strdup(name);
         node->data.function.parameters = parameters;
         node->data.function.body = NULL;
+        node->data.function.is_virtual = 0;
+        node->data.function.is_override = 0;
+    }
+    return node;
+}
+
+ast_node *create_virtual_function_declaration(ast_node *return_type, char *name, ast_node *parameters, int is_override) {
+    ast_node *node = create_function_declaration(return_type, name, parameters);
+    if (node) {
+        node->data.function.is_virtual = 1;
+        node->data.function.is_override = is_override;
     }
     return node;
 }
@@ -160,12 +171,13 @@ ast_node *create_multidimensional_array_declaration(ast_node *type, char *name, 
 }
 
 // Class and struct nodes
-ast_node *create_class_declaration(char *name, char *base_class, ast_node *members) {
+ast_node *create_class_declaration(char *name, char *base_class, ast_node *members, int is_virtual_inheritance) {
     ast_node *node = create_node(NODE_CLASS_DECLARATION);
     if (node) {
         node->data.class_decl.name = my_strdup(name);
         node->data.class_decl.base_class = my_strdup(base_class);
         node->data.class_decl.members = members;
+        node->data.class_decl.is_virtual_inheritance = is_virtual_inheritance;
     }
     return node;
 }

@@ -371,6 +371,7 @@ member : type_specifier declarator SEMICOLON {
         add_ast_child($$, $2);
     };
 
+
 class_declaration:
     CLASS IDENTIFIER
     {
@@ -379,10 +380,22 @@ class_declaration:
     LBRACE member_declaration_list RBRACE SEMICOLON
     {
         current_scope = current_scope->parent;
-        $$ = create_class_declaration($2, NULL, $5);
+        $$ = create_class_declaration($2, NULL, $5, 0);
     }
     | CLASS IDENTIFIER COLON access_specifier IDENTIFIER LBRACE member_declaration_list RBRACE SEMICOLON {
-        $$ = create_class_declaration($2, $5, $7);
+        // Handles: class Derived : public Base { ... };
+        // $2=ClassName, $5=BaseName, $7=Members
+        $$ = create_class_declaration($2, $5, $7, 0);
+    }
+    | CLASS IDENTIFIER COLON VIRTUAL access_specifier IDENTIFIER LBRACE member_declaration_list RBRACE SEMICOLON {
+        // Handles: class Derived : virtual public Base { ... };
+        // $2=ClassName, $6=BaseName, $8=Members
+        $$ = create_class_declaration($2, $6, $8, 1);
+    }
+    | CLASS IDENTIFIER COLON access_specifier VIRTUAL IDENTIFIER LBRACE member_declaration_list RBRACE SEMICOLON {
+        // Handles: class Derived : public virtual Base { ... };
+        // $2=ClassName, $6=BaseName, $8=Members
+        $$ = create_class_declaration($2, $6, $8, 1);
     }
     | CLASS IDENTIFIER LBRACE member_declaration_list RBRACE {
         yyerror("Missing semicolon after class declaration");
@@ -397,6 +410,19 @@ member_declaration:
     type_specifier IDENTIFIER SEMICOLON {
         $$ = create_member_declaration($1, create_identifier_declarator($2));
     }
+    | VIRTUAL type_specifier IDENTIFIER LPAREN parameter_list RPAREN SEMICOLON {
+        // Virtual function declaration: virtual void func(int);
+        $$ = create_virtual_function_declaration($2, $3, $5, 0);
+    }
+    | VIRTUAL type_specifier IDENTIFIER LPAREN parameter_list RPAREN OVERRIDE SEMICOLON {
+        // Virtual function with override: virtual void func(int) override;
+        $$ = create_virtual_function_declaration($2, $3, $5, 1);
+    }
+    | type_specifier IDENTIFIER LPAREN parameter_list RPAREN OVERRIDE SEMICOLON {
+        // Function with override: void func(int) override;
+        $$ = create_function_declaration($1, $2, $4); // You may want to adapt this to handle override
+    }
+    | function_declaration { $$ = $1; } // Added to handle regular member function declarations
     | access_specifier COLON { $$ = $1; }
     | function_definition { $$ = $1; };
 
