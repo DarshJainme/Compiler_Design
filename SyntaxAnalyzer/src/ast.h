@@ -94,7 +94,6 @@ typedef enum {
     NODE_ACCESS_SPECIFIER,
     
     /* Advanced features */
-    NODE_LAMBDA_EXPRESSION,
     NODE_NEW_EXPRESSION,
     NODE_DELETE_EXPRESSION,
     NODE_THIS_EXPRESSION,
@@ -480,7 +479,6 @@ ast_node *append_member_declarator(ast_node *list, ast_node *declarator);
 ast_node *create_initialized_member_declarator(ast_node *declarator, ast_node *initializer);
 
 /* Advanced feature nodes */
-ast_node *create_lambda_expression(ast_node *capture_list, ast_node *parameters, ast_node *body);
 ast_node *create_new_expression(ast_node *type, ast_node *size);
 ast_node *create_delete_expression(ast_node *expression);
 ast_node *create_this_expression(void);

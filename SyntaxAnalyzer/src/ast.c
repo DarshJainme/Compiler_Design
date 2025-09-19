@@ -634,15 +634,6 @@ ast_node *create_initialized_member_declarator(ast_node *declarator, ast_node *i
 }
 
 // Advanced feature nodes
-ast_node *create_lambda_expression(ast_node *capture_list, ast_node *parameters, ast_node *body) {
-    ast_node *node = create_node(NODE_LAMBDA_EXPRESSION);
-    if (node) {
-        node->data.lambda_expr.capture_list = capture_list;
-        node->data.lambda_expr.parameters = parameters;
-        node->data.lambda_expr.body = body;
-    }
-    return node;
-}
 
 ast_node *create_new_expression(ast_node *type, ast_node *size) {
     ast_node *node = create_node(NODE_NEW_EXPRESSION);
