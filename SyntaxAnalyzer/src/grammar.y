@@ -164,10 +164,7 @@ external_declaration : function_definition { $$ = $1; }
                 | typedef_declaration { $$ = $1; };
 
 variable_declaration:
-    STRUCT IDENTIFIER IDENTIFIER SEMICOLON {
-        $$ = create_ast_node(NODE_DECLARATION, $3, yylineno);
-    }
-    | type_specifier IDENTIFIER SEMICOLON {
+    type_specifier IDENTIFIER SEMICOLON {
         $$ = create_variable_declaration($1, create_identifier_declarator($2), NULL);
         if (current_scope) {
             const char* type_name = $1->data.type_specifier.type_name;
