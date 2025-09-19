@@ -665,22 +665,6 @@ ast_node *create_this_expression(void) {
     return create_node(NODE_THIS_EXPRESSION);
 }
 
-ast_node *create_printf_call(ast_node *arguments) {
-    ast_node *node = create_node(NODE_PRINTF_CALL);
-    if (node) {
-        node->data.printf_call.arguments = arguments;
-    }
-    return node;
-}
-
-ast_node *create_scanf_call(ast_node *arguments) {
-    ast_node *node = create_node(NODE_SCANF_CALL);
-    if (node) {
-        node->data.scanf_call.arguments = arguments;
-    }
-    return node;
-}
-
 ast_node *create_malloc_call(ast_node *size) {
     ast_node *node = create_node(NODE_MALLOC_CALL);
     if (node) {

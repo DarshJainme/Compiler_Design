@@ -98,8 +98,6 @@ typedef enum {
     NODE_NEW_EXPRESSION,
     NODE_DELETE_EXPRESSION,
     NODE_THIS_EXPRESSION,
-    NODE_PRINTF_CALL,
-    NODE_SCANF_CALL,
     NODE_MALLOC_CALL,
     NODE_FREE_CALL
 } node_type;
@@ -375,17 +373,6 @@ typedef union node_data {
     struct {
         ast_node *expression;
     } delete_expr;
-    
-    /* Printf call */
-    struct {
-        ast_node *arguments;
-    } printf_call;
-    
-    /* Scanf call */
-    struct {
-        ast_node *arguments;
-    } scanf_call;
-    
     /* Malloc call */
     struct {
         ast_node *size;
@@ -504,8 +491,6 @@ ast_node *create_lambda_expression(ast_node *capture_list, ast_node *parameters,
 ast_node *create_new_expression(ast_node *type, ast_node *size);
 ast_node *create_delete_expression(ast_node *expression);
 ast_node *create_this_expression(void);
-ast_node *create_printf_call(ast_node *arguments);
-ast_node *create_scanf_call(ast_node *arguments);
 ast_node *create_malloc_call(ast_node *size);
 ast_node *create_free_call(ast_node *pointer);
 
