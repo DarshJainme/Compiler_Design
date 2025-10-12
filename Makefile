@@ -37,7 +37,7 @@ run: $(TARGET)
 
 clean:
 ifeq ($(OS),Windows_NT)
-	del /f /q $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) ${COMPILER_EXECUTABLE}
+	del /f /q $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) ${COMPILER_EXECUTABLE} parser.output
 else
-	rm -f $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) ${COMPILER_EXECUTABLE}
+	rm -f $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) ${COMPILER_EXECUTABLE} parser.output
 endif
