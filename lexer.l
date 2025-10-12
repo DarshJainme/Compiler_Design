@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "parser.tab.h" /* Header from Bison */
-#include "symbol_table.h"
+#include "st.h"
 
 /* All error reporting will be handled by the parser's yyerror */
 void yyerror(const char *s);
