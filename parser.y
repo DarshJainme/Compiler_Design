@@ -302,7 +302,8 @@ delete_expression
     ;
 
 lambda_expression
-    : '[' ']' '(' ')' compound_statement { $$ = create_lambda_node(NULL, NULL, $5); }
+    : '[' ']' '(' parameter_type_list ')' compound_statement { $$ = create_lambda_node(NULL, $4, $6); }
+    | '[' ']' '(' ')' compound_statement                      { $$ = create_lambda_node(NULL, NULL, $5); }
     ;
 
 /* --- Statements --- */
@@ -483,6 +484,7 @@ class_specifier
 
 class_name
     : IDENTIFIER { $$ = create_identifier_node($1); }
+    | TYPE_NAME { $$ = create_typename_node($1); }
     ;
 
 base_clause
