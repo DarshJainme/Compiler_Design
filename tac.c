@@ -286,11 +286,7 @@ void gen_tac_for_node(ASTNode* node) {
             break;
         }
 
-        // Add cases for declarations, other statements (while, for), etc.
         default:
-            // For many nodes (like declarations), you might not generate code directly,
-            // as their information is already in the symbol table.
-            // For others, you'll need to implement the logic.
             break;
     }
 }
