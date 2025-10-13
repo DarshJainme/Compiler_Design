@@ -16,7 +16,8 @@ float a6 = 5e+3;
 // a1 = a2 ? 100 : 200;
 // a7 += " world";
 // // string a8 = "Number: " + a1;
-
+int a=0,b=0;
+a=a+++b;
 int b1  = 0;
 b1 += 1;
 b1 -= 1;

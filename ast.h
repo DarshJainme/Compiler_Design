@@ -12,6 +12,8 @@ typedef enum {
     // Expressions
     NODE_BINARY_EXPR,
     NODE_UNARY_EXPR,
+    NODE_POSTFIX_UNARY_EXPR, // For b++ and b--
+    NODE_PREFIX_UNARY_EXPR,  // For ++b and --b
     NODE_CONDITIONAL_EXPR,
     NODE_ASSIGNMENT,
     NODE_FUNC_CALL,

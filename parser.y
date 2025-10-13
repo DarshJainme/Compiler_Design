@@ -5,6 +5,7 @@
 #include "ast.h"
 #include "semantic.h"
 #include "symbol_table.h"
+#include "tac.h"
 
 ASTNode *root = NULL;
 int parse_errors = 0;
@@ -159,8 +160,9 @@ postfix_expression
     | postfix_expression '(' argument_expression_list ')'  { $$ = create_func_call_node($1, $3); }
     | postfix_expression '.' IDENTIFIER                    { $$ = create_member_access_node($1, $3, 0); }
     | postfix_expression PTR_OP IDENTIFIER                 { $$ = create_member_access_node($1, $3, 1); }
-    | postfix_expression INC_OP                           { $$ = create_unary_expr_node(INC_OP, $1); } // This is fine for now, can be refined later
-    | postfix_expression DEC_OP                           { $$ = create_unary_expr_node(DEC_OP, $1); }
+    // for differentiating postfix and prefix part
+    | postfix_expression INC_OP                            { $$ = create_unary_expr_node(INC_OP, $1); $$->type = NODE_POSTFIX_UNARY_EXPR; }
+    | postfix_expression DEC_OP                            { $$ = create_unary_expr_node(DEC_OP, $1); $$->type = NODE_POSTFIX_UNARY_EXPR; }
     ;
 
 argument_expression_list
@@ -172,8 +174,8 @@ argument_expression_list
     
 unary_expression
     : postfix_expression
-    | INC_OP unary_expression      { $$ = create_unary_expr_node(INC_OP, $2); } // Pre-increment
-    | DEC_OP unary_expression      { $$ = create_unary_expr_node(DEC_OP, $2); } // Pre-decrement
+    | INC_OP unary_expression      { $$ = create_unary_expr_node(INC_OP, $2); $$->type = NODE_PREFIX_UNARY_EXPR; }
+    | DEC_OP unary_expression      { $$ = create_unary_expr_node(DEC_OP, $2); $$->type = NODE_PREFIX_UNARY_EXPR; }
     | '&' cast_expression { $$ = create_unary_expr_node('&', $2); }
     | '*' cast_expression { $$ = create_unary_expr_node('*', $2); }
     | '+' cast_expression { $$ = create_unary_expr_node('+', $2); }
@@ -634,6 +636,10 @@ int main(int argc, char **argv) {
             printf("--- Semantic Analysis Successful ---\n");
             printf("\n--- Abstract Syntax Tree ---\n\n");
             if (root) print_ast(root, 0);
+            
+            printf("\n--- Generating Three-Address Code ---\n");
+            generate_tac(root);
+            print_tac();
             // print_symbol_table(current_scope, 0);
 
         } else {

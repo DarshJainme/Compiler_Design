@@ -225,7 +225,8 @@ Type* analyze_expression(ASTNode* node) {
             }
             return lvalue_type;
         }
-        
+        case NODE_PREFIX_UNARY_EXPR:
+        case NODE_POSTFIX_UNARY_EXPR:
         case NODE_UNARY_EXPR: {
             Type* operand_type = analyze_expression(node->data.unary_expr.operand);
             switch (node->data.unary_expr.op) {
