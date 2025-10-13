@@ -1,6 +1,6 @@
 // Simple statements
 
-int a1 = 5;
+a1 = 5;
 bool a2 = true;
 char a3 = 'c';
 float a4 = 5.5;
