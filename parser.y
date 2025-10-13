@@ -3,9 +3,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include "ast.h"
+#include "semantic.h"
+#include "symbol_table.h"
 
 ASTNode *root = NULL;
-int error_flag = 1;
+int parse_errors = 0;
 
 extern int yylineno;
 extern int yylex();
@@ -132,7 +134,6 @@ external_declaration
     : function_definition  { $$ = $1; }
     | declaration          { $$ = $1; }
     | expression_statement { $$ = $1; } // Allow top-level statements
-    | ';'                  { $$ = NULL; } // Allow empty top-level statements
     ;
 
 function_definition
@@ -610,7 +611,7 @@ initializer_list
 
 void yyerror(const char *s) {
     fprintf(stderr, "Syntax Error on line %d near '%s': %s\n", yylineno, yytext, s);
-    error_flag = 0;
+    parse_errors++;
 }
 
 int main(int argc, char **argv) {
@@ -626,13 +627,17 @@ int main(int argc, char **argv) {
 
     yyparse();
 
-    if (error_flag) {
+    if (parse_errors == 0) {
         printf("\n--- Parsing Successful ---\n");
-        printf("\n--- Abstract Syntax Tree ---\n\n");
-        if (root) {
-            print_ast(root, 0);
+        printf("\n--- Performing Semantic Analysis ---\n");
+        if (analyze_ast(root)) {
+            printf("--- Semantic Analysis Successful ---\n");
+            printf("\n--- Abstract Syntax Tree ---\n\n");
+            if (root) print_ast(root, 0);
+            // print_symbol_table(current_scope, 0);
+
         } else {
-            printf("AST root is null.\n");
+            printf("\n--- Semantic Analysis Failed ---\n");
         }
     } else {
         printf("\n--- Parsing Failed ---\n");
@@ -642,5 +647,5 @@ int main(int argc, char **argv) {
         fclose(yyin);
     }
     
-    return error_flag ? 0 : 1;
+    return (parse_errors > 0);
 }
