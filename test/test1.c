@@ -1,6 +1,6 @@
 // Simple statements
 
-a1 = 5;
+int a1 = 5;
 bool a2 = true;
 char a3 = 'c';
 float a4 = 5.5;
@@ -13,7 +13,7 @@ float a6 = 5e+3;
 // a2 = false;
 // a3++;
 // a4 = a5 * a6 / 2.0 - 3.0 + (a1 % 2);
-a1 = a2 ? 100 : 200;
+// a1 = a2 ? 100 : 200;
 // a7 += " world";
 // // string a8 = "Number: " + a1;
 
