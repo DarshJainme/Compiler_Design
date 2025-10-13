@@ -132,7 +132,6 @@ external_declaration
     : function_definition  { $$ = $1; }
     | declaration          { $$ = $1; }
     | expression_statement { $$ = $1; } // Allow top-level statements
-    | ';'                  { $$ = NULL; } // Allow empty top-level statements
     ;
 
 function_definition
