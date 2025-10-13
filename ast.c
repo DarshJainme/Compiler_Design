@@ -346,6 +346,15 @@ void print_ast(ASTNode* node, int indent) {
             print_indent(indent + 1); printf("Operand:\n");
             print_ast(node->data.unary_expr.operand, indent + 2);
             break;
+        case NODE_PREFIX_UNARY_EXPR:
+            printf("Prefix Unary Expr (op: %s) [line %d]\n", token_to_string(node->data.unary_expr.op), node->lineno);
+            print_ast(node->data.unary_expr.operand, indent + 1);
+            break;
+
+        case NODE_POSTFIX_UNARY_EXPR:
+            printf("Postfix Unary Expr (op: %s) [line %d]\n", token_to_string(node->data.unary_expr.op), node->lineno);
+            print_ast(node->data.unary_expr.operand, indent + 1);
+            break;
         
         case NODE_BINARY_EXPR:
             printf("Binary Expr (op: %s) [line %d]\n", token_to_string(node->data.binary_expr.op), node->lineno);
