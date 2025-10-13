@@ -1,5 +1,5 @@
-#ifndef SYMBOL_TABLE_H
-#define SYMBOL_TABLE_H
+#ifndef ST_H
+#define ST_H
 
 /* This struct defines an entry in our simple symbol table */
 typedef struct TokenEntry {
@@ -20,4 +20,4 @@ void add_typename(const char* name);
 int is_typename(const char* name);
 
 
-#endif /* SYMBOL_TABLE_H */
+#endif /* ST_H */
