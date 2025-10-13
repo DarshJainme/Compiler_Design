@@ -330,5 +330,6 @@ ASTNode* create_delete_expr_node(ASTNode* expr);
 
 // Function to print the AST for debugging
 void print_ast(ASTNode* node, int indent);
+const char* token_to_string(int token);
 
 #endif // AST_H
