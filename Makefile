@@ -10,6 +10,7 @@ LEX_SRC = lexer.l
 YACC_SRC = parser.y
 AST_SRC = ast.c
 SEM_SRCS = types.c symbol_table.c semantic.c
+TAC_SRC = tac.c
 
 # Generated files
 LEX_C = lex.yy.c
@@ -24,8 +25,8 @@ CFLAGS = -Wall -Wno-unused-function -g # -g for debugging symbols
 
 all: $(TARGET)
 
-$(TARGET): $(YACC_C) $(LEX_C) $(AST_SRC) $(SEM_SRCS)
-	$(CC) $(CFLAGS) $(YACC_C) $(LEX_C) $(AST_SRC) $(SEM_SRCS) -o $(TARGET)
+$(TARGET): $(YACC_C) $(LEX_C) $(AST_SRC) $(SEM_SRCS) $(TAC_SRC)
+	$(CC) $(CFLAGS) $(YACC_C) $(LEX_C) $(AST_SRC) $(SEM_SRCS) $(TAC_SRC) -o $(TARGET)
 
 $(LEX_C): $(LEX_SRC) $(YACC_H)
 	$(LEX) $<
