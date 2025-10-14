@@ -5,6 +5,7 @@
 
 // Enum for basic type kinds
 typedef enum {
+    TYPE_UNKNOWN = 0,
     TYPE_VOID,
     TYPE_BOOL,
     TYPE_CHAR,
@@ -16,9 +17,10 @@ typedef enum {
     TYPE_ARRAY,
     TYPE_POINTER,
     TYPE_FUNCTION,
-    TYPE_STRUCT_UNION,
+    TYPE_STRUCT,
+    TYPE_UNION,
     TYPE_ENUM,
-    TYPE_UNKNOWN
+    TYPE_STRING,
 } TypeKind;
 
 // Forward declarations
@@ -44,7 +46,7 @@ typedef struct Type {
         // For structs and unions
         struct {
             char* name;
-            struct Scope* members; // A dedicated scope for struct members
+            Member* members; // A dedicated scope for struct members
         } struct_union_info;
     } data;
 } Type;

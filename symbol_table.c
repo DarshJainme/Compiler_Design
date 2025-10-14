@@ -35,12 +35,17 @@ void enter_scope() {
     current_scope = new_scope;
 }
 
+Scope* get_current_scope(){
+    return current_scope;
+}
 void leave_scope() {
-    if (current_scope && current_scope->parent) {
-        Scope* parent_scope = current_scope->parent;
-        destroy_scope(current_scope);
-        current_scope = parent_scope;
-    }
+    if (!current_scope || !current_scope->parent) return;
+    printf("\n--- Leaving Scope ---\n");
+    print_symbol_table(current_scope, 0);
+    printf("--- End of Scope ---\n\n");
+    Scope* parent_scope = current_scope->parent;
+    destroy_scope(current_scope);
+    current_scope = parent_scope;
 }
 
 Symbol* add_symbol(const char* name, Type* type, SymbolKind kind) {
@@ -97,7 +102,7 @@ void print_symbol_table(Scope* scope, int depth) {
                sym->kind,
                sym->line_declared);
     }
-    if (scope->parent) {
-        print_symbol_table(scope->parent, depth + 1);
-    }
+    // if (scope->parent) {
+    //     print_symbol_table(scope->parent, depth + 1);
+    // }
 }

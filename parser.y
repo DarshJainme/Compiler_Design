@@ -430,12 +430,12 @@ type_qualifier
     ;
 
 struct_or_union_specifier
-    : STRUCT IDENTIFIER '{' struct_declaration_list '}' { add_typename($2); $$ = create_struct_union_node(STRUCT, $2, $4); }
-    | UNION IDENTIFIER '{' struct_declaration_list '}'  { add_typename($2); $$ = create_struct_union_node(UNION, $2, $4); }
-    | STRUCT '{' struct_declaration_list '}'            { $$ = create_struct_union_node(STRUCT, NULL, $3); }
-    | UNION '{' struct_declaration_list '}'             { $$ = create_struct_union_node(UNION, NULL, $3); }
-    | STRUCT TYPE_NAME                                 { $$ = create_struct_union_node(STRUCT, $2, NULL); }
-    | UNION TYPE_NAME                                 { $$ = create_struct_union_node(UNION, $2, NULL); }
+    : STRUCT IDENTIFIER '{' struct_declaration_list '}' { add_typename($2); $$ = create_struct_or_union_specifier_node(STRUCT, $2, $4); }
+    | UNION IDENTIFIER '{' struct_declaration_list '}'  { add_typename($2); $$ = create_struct_or_union_specifier_node(UNION, $2, $4); }
+    | STRUCT '{' struct_declaration_list '}'            { $$ = create_struct_or_union_specifier_node(STRUCT, NULL, $3); }
+    | UNION '{' struct_declaration_list '}'             { $$ = create_struct_or_union_specifier_node(UNION, NULL, $3); }
+    | STRUCT TYPE_NAME                                 { $$ = create_struct_or_union_specifier_node(STRUCT, $2, NULL); }
+    | UNION TYPE_NAME                                 { $$ = create_struct_or_union_specifier_node(UNION, $2, NULL); }
     ;
 
 struct_declaration_list
@@ -628,13 +628,18 @@ int main(int argc, char **argv) {
     yyparse();
 
     if (parse_errors == 0) {
+        printf("\n--- Performing syntax analysis ---\n");
         printf("\n--- Parsing Successful ---\n");
+        pritnf("\n--- Printing Abstract SYntax Tree after syntax analysis phase ---\n");
+        if (root) print_ast(root, 0);
         printf("\n--- Performing Semantic Analysis ---\n");
         if (analyze_ast(root)) {
             printf("--- Semantic Analysis Successful ---\n");
-            printf("\n--- Abstract Syntax Tree ---\n\n");
+            printf("\n--- Final Symbol Table ---\n");
+            print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
+            printf("--- End of Symbol Table ---\n\n");
+            printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
             if (root) print_ast(root, 0);
-            // print_symbol_table(current_scope, 0);
 
         } else {
             printf("\n--- Semantic Analysis Failed ---\n");

@@ -3,6 +3,9 @@
 #include <string.h>
 #include "types.h"
 #include "parser.tab.h"
+#include "semantic.h"
+#include "symbol_table.h"
+#include "ast.h"
 
 Type* create_type(TypeKind kind) {
     Type* new_type = (Type*)calloc(1, sizeof(Type));
@@ -50,12 +53,20 @@ char* type_to_string_recursive(Type* type, char* buffer) {
         case TYPE_LONG:   strcat(temp, "long"); break;
         case TYPE_FLOAT:  strcat(temp, "float"); break;
         case TYPE_DOUBLE: strcat(temp, "double"); break;
-        case TYPE_POINTER:
-            sprintf(buffer, "%s*", type_to_string_recursive(type->data.base, temp));
+        case TYPE_STRING: strcat(temp, "string"); break;
+        case TYPE_ENUM:   strcat(temp, "enum"); break;
+        case TYPE_POINTER: {
+            // Correctly handle recursive call
+            char base_buffer[128];
+            sprintf(buffer, "%s*", type_to_string_recursive(type->data.base, base_buffer));
             return buffer;
-        case TYPE_ARRAY:
-            sprintf(buffer, "%s[]", type_to_string_recursive(type->data.base, temp));
+        }
+        case TYPE_ARRAY: {
+            // Correctly handle recursive call
+            char base_buffer_arr[128];
+            sprintf(buffer, "%s[]", type_to_string_recursive(type->data.base, base_buffer_arr));
             return buffer;
+        }
         default: strcat(temp, "unknown_type"); break;
     }
     strcpy(buffer, temp);
@@ -80,6 +91,7 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
                 case VOID:   type->kind = TYPE_VOID;   type_specified = 1; break;
                 case BOOL:   type->kind = TYPE_BOOL;   type_specified = 1; break;
                 case CHAR:   type->kind = TYPE_CHAR;   type_specified = 1; break;
+                case STRING: type->kind = TYPE_STRING; type_specified = 1; break;
                 case SHORT:  type->kind = TYPE_SHORT;  type_specified = 1; break;
                 case INT:    type->kind = TYPE_INT;    type_specified = 1; break;
                 case LONG:   type->kind = TYPE_LONG;   type_specified = 1; break;
@@ -88,11 +100,25 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
                 case UNSIGNED: type->is_unsigned = 1; break;
                 case CONST:    type->is_const = 1; break;
             }
+        } else if (s->node->type == NODE_ENUM_SPECIFIER){
+            type->kind = TYPE_ENUM;
+            type_specified = 1;
+            analyze_enum_specifier(s->node);
+        } else if (s->node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
+            if(s->node->data.struct_or_union_specifier.kind == STRUCT) {
+                type->kind = TYPE_STRUCT;
+            } else{
+                type->kind = TYPE_UNION;
+            }
+            type_specified = 1;
+            analyze_struct_or_union_specifier(s->node, type);
         } else if (s->node->type == NODE_TYPENAME) {
-             // A real compiler would look up the typedef here.
-             // For now, we assume it's some form of int.
-             type->kind = TYPE_INT;
-             type_specified = 1;
+            Symbol *sym = find_symbol(s->node->data.stringValue);
+            if (sym && sym->kind == SYM_TYPEDEF) {
+            free(type); // free the one we allocated
+            type = copy_type(sym->type); // use the typedef'd type
+            type_specified = 1;
+            }
         }
     }
     if (!type_specified) {
@@ -150,6 +176,10 @@ int are_types_compatible(Type* type1, Type* type2) {
     }
     // Allow assignment between any two arithmetic types (e.g., int = float)
     if (is_arithmetic_type(type1) && is_arithmetic_type(type2)) {
+        return 1;
+    }
+    // Allow char array = string literal
+    if (type1->kind == TYPE_ARRAY && type1->data.base->kind == TYPE_CHAR && type2->kind == TYPE_STRING) {
         return 1;
     }
     return 0;
