@@ -374,6 +374,8 @@ jump_statement
 declaration
     : declaration_specifiers ';' { $$ = create_declaration_node($1, NULL); }
     | declaration_specifiers init_declarator_list ';' { $$ = create_declaration_node($1, $2); }
+    | CLASS IDENTIFIER ';' { $$ = create_class_node($2, NULL, NULL); }
+    // we added this as we wanted to add forward declaration
     ;
 
 declaration_specifiers
@@ -385,6 +387,7 @@ declaration_specifier
     : storage_class_specifier              { $$ = $1; }
     | type_specifier                       { $$ = $1; }
     | type_qualifier                       { $$ = $1; }
+    | FRIEND                               { $$ = create_specifier_node(FRIEND); }
     ;
 
 init_declarator_list
@@ -631,11 +634,11 @@ int main(int argc, char **argv) {
 
     if (parse_errors == 0) {
         printf("\n--- Parsing Successful ---\n");
+            printf("\n--- Abstract Syntax Tree ---\n\n");
+            if (root) print_ast(root, 0);
         printf("\n--- Performing Semantic Analysis ---\n");
         if (analyze_ast(root)) {
             printf("--- Semantic Analysis Successful ---\n");
-            printf("\n--- Abstract Syntax Tree ---\n\n");
-            if (root) print_ast(root, 0);
             
             printf("\n--- Generating Three-Address Code ---\n");
             generate_tac(root);
