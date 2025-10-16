@@ -55,6 +55,9 @@ char* type_to_string_recursive(Type* type, char* buffer) {
         case TYPE_DOUBLE: strcat(temp, "double"); break;
         case TYPE_STRING: strcat(temp, "string"); break;
         case TYPE_ENUM:   strcat(temp, "enum"); break;
+        case TYPE_FUNCTION: strcat(temp, "function"); break;
+        case TYPE_STRUCT:  strcat(temp, "struct"); break;
+        case TYPE_UNION:   strcat(temp, "union"); break;
         case TYPE_POINTER: {
             // Correctly handle recursive call
             char base_buffer[128];
@@ -76,18 +79,48 @@ char* type_to_string_recursive(Type* type, char* buffer) {
 char* type_to_string(Type* type) {
     static char buffer[256];
     buffer[0] = '\0';
+    if (!type) {
+        strcpy(buffer, "null_type");
+        return buffer;
+    }
+    
+    // --- THIS IS THE FIX ---
+    if (type->kind == TYPE_UNKNOWN) {
+        strcpy(buffer, "unknown_type");
+        return buffer;
+    }
+    // --- END FIX ---
+    
+    // Now call the recursive helper for valid types
     return type_to_string_recursive(type, buffer);
 }
 
+// case VOID:   type->kind = TYPE_VOID;   type_specified = 1; break;
+//                 case BOOL:   type->kind = TYPE_BOOL;   type_specified = 1; break;
+//                 case CHAR:   type->kind = TYPE_CHAR;   type_specified = 1; break;
+//                 case STRING: type->kind = TYPE_STRING; type_specified = 1; break;
+//                 case SHORT:  type->kind = TYPE_SHORT;  type_specified = 1; break;
+//                 case INT:    type->kind = TYPE_INT;    type_specified = 1; break;
+//                 case LONG:   type->kind = TYPE_LONG;   type_specified = 1; break;
+//                 case FLOAT:  type->kind = TYPE_FLOAT;  type_specified = 1; break;
+//                 case DOUBLE: type->kind = TYPE_DOUBLE; type_specified = 1; break;
+//                 case UNSIGNED: type->is_unsigned = 1; break;
+//                 case CONST:    type->is_const = 1; break;
+// In semantic.c
+
 Type* get_type_from_specifiers(ASTNodeList* specifiers) {
-    if (!specifiers) return create_type(TYPE_INT); // Default int
+    if (!specifiers) return create_type(TYPE_INT);
 
     Type* type = create_type(TYPE_UNKNOWN);
     int type_specified = 0;
+    const char* user_defined_typename = NULL;
+    ASTNode* struct_union_spec_node = NULL;
 
+    // First pass: Find the primary type specifier (int, struct, typename, etc.)
     for (ASTNodeList* s = specifiers; s; s = s->next) {
-        if (s->node->type == NODE_SPECIFIER) {
-            switch (s->node->data.specifier) {
+        ASTNode *spec_node = s->node;
+        if (spec_node->type == NODE_SPECIFIER) {
+            switch (spec_node->data.specifier) {
                 case VOID:   type->kind = TYPE_VOID;   type_specified = 1; break;
                 case BOOL:   type->kind = TYPE_BOOL;   type_specified = 1; break;
                 case CHAR:   type->kind = TYPE_CHAR;   type_specified = 1; break;
@@ -97,33 +130,84 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
                 case LONG:   type->kind = TYPE_LONG;   type_specified = 1; break;
                 case FLOAT:  type->kind = TYPE_FLOAT;  type_specified = 1; break;
                 case DOUBLE: type->kind = TYPE_DOUBLE; type_specified = 1; break;
-                case UNSIGNED: type->is_unsigned = 1; break;
-                case CONST:    type->is_const = 1; break;
+                default: break;
             }
-        } else if (s->node->type == NODE_ENUM_SPECIFIER){
-            type->kind = TYPE_ENUM;
+        } else if (spec_node->type == NODE_TYPENAME) {
+            user_defined_typename = spec_node->data.stringValue;
             type_specified = 1;
-            analyze_enum_specifier(s->node);
-        } else if (s->node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
-            if(s->node->data.struct_or_union_specifier.kind == STRUCT) {
-                type->kind = TYPE_STRUCT;
-            } else{
-                type->kind = TYPE_UNION;
-            }
+        } else if (spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
+            struct_union_spec_node = spec_node;
             type_specified = 1;
-            analyze_struct_or_union_specifier(s->node, type);
-        } else if (s->node->type == NODE_TYPENAME) {
-            Symbol *sym = find_symbol(s->node->data.stringValue);
-            if (sym && sym->kind == SYM_TYPEDEF) {
-            free(type); // free the one we allocated
-            type = copy_type(sym->type); // use the typedef'd type
+        } else if (spec_node->type == NODE_ENUM_SPECIFIER) {
+            // Enums are handled similarly to structs
+            struct_union_spec_node = spec_node;
             type_specified = 1;
-            }
         }
     }
-    if (!type_specified) {
-        type->kind = TYPE_INT; // Default to int if only qualifiers like 'const' are present
+
+    // Second pass: Apply modifiers (const, unsigned)
+    for (ASTNodeList* s = specifiers; s; s = s->next) {
+        if (s->node->type == NODE_SPECIFIER) {
+            if (s->node->data.specifier == UNSIGNED) type->is_unsigned = 1;
+            if (s->node->data.specifier == CONST) type->is_const = 1;
+        }
     }
+    
+    // Now, resolve the specific type
+    if (user_defined_typename) {
+        Symbol* sym = find_symbol(user_defined_typename);
+        if (sym && sym->kind == SYM_TYPEDEF) {
+            free(type); // Free the temp type
+            return copy_type(sym->type); // Return a copy of the complete type from the symbol table
+        } else {
+            fprintf(stderr, "Semantic Error: Unknown type name '%s'.\n", user_defined_typename);
+            semantic_errors++;
+            type->kind = TYPE_UNKNOWN;
+            return type;
+        }
+    } else if (struct_union_spec_node) {
+        if(struct_union_spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
+            const char* tag_name = struct_union_spec_node->data.struct_or_union_specifier.name;
+            
+            // This is a USAGE, e.g., "struct MyStruct s;"
+            if (tag_name && !struct_union_spec_node->data.struct_or_union_specifier.members) {
+                Symbol* sym = find_symbol(tag_name);
+                if (sym && sym->kind == SYM_TYPEDEF) {
+                    free(type);
+                    return copy_type(sym->type);
+                } else {
+                    fprintf(stderr, "Semantic Error: Incomplete type '%s'.\n", tag_name);
+                    semantic_errors++;
+                    type->kind = TYPE_UNKNOWN;
+                    return type;
+                }
+            }
+            // This is a DEFINITION, e.g., "struct MyStruct { ... }"
+            else {
+                type->kind = (struct_union_spec_node->data.struct_or_union_specifier.kind == STRUCT) ? TYPE_STRUCT : TYPE_UNION;
+                analyze_struct_or_union_specifier(struct_union_spec_node, type);
+                return type;
+            }
+        } else if (struct_union_spec_node->type == NODE_ENUM_SPECIFIER) {
+            // This logic is similar for enums
+            const char* tag_name = struct_union_spec_node->data.enum_specifier.name;
+            if(tag_name && !struct_union_spec_node->data.enum_specifier.members) {
+                 Symbol* sym = find_symbol(tag_name);
+                 if (sym && sym->kind == SYM_TYPEDEF) {
+                    free(type);
+                    return copy_type(sym->type);
+                }
+            }
+            type->kind = TYPE_ENUM;
+            analyze_enum_specifier(struct_union_spec_node);
+            return type;
+        }
+    }
+
+    if (!type_specified) {
+        type->kind = TYPE_INT; // Default to int
+    }
+
     return type;
 }
 
@@ -176,6 +260,10 @@ int are_types_compatible(Type* type1, Type* type2) {
     }
     // Allow assignment between any two arithmetic types (e.g., int = float)
     if (is_arithmetic_type(type1) && is_arithmetic_type(type2)) {
+        return 1;
+    }
+    // allowing an integer to be assigned to an enum type.
+    if (type1->kind == TYPE_ENUM && is_integer_type(type2)) {
         return 1;
     }
     // Allow char array = string literal

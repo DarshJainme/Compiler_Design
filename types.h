@@ -2,6 +2,7 @@
 #define TYPES_H
 
 #include "ast.h"
+#include "semantic.h"
 
 // Enum for basic type kinds
 typedef enum {

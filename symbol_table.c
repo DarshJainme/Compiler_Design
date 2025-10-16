@@ -40,9 +40,9 @@ Scope* get_current_scope(){
 }
 void leave_scope() {
     if (!current_scope || !current_scope->parent) return;
-    printf("\n--- Leaving Scope ---\n");
-    print_symbol_table(current_scope, 0);
-    printf("--- End of Scope ---\n\n");
+    // printf("\n--- Leaving Scope ---\n");
+    // print_symbol_table(current_scope, 0);
+    // printf("--- End of Scope ---\n\n");
     Scope* parent_scope = current_scope->parent;
     destroy_scope(current_scope);
     current_scope = parent_scope;

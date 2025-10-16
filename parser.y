@@ -457,8 +457,9 @@ struct_declarator_list
     ;
 
 struct_declarator
-    : declarator
-    | declarator ':' constant_expression { $$ = $1; }
+    // : declarator { $$ = create_init_declarator_node($1, NULL); }
+    : declarator { $$ = $1; }
+    | declarator ':' constant_expression { /* Bitfield support, can ignore for now */ $$ = $1; }
     ;
 
 enum_specifier
@@ -475,8 +476,8 @@ enumerator_list
     ;
 
 enumerator
-    : IDENTIFIER { $$ = create_identifier_node($1); }
-    | IDENTIFIER '=' constant_expression { $$ = create_assignment_node(create_identifier_node($1), '=', $3); }
+    : IDENTIFIER { $$ = create_enumerator_node($1, NULL); }
+    | IDENTIFIER '=' constant_expression { $$ = create_enumerator_node($1, $3); }
     ;
 
 class_specifier
@@ -630,14 +631,14 @@ int main(int argc, char **argv) {
     if (parse_errors == 0) {
         printf("\n--- Performing syntax analysis ---\n");
         printf("\n--- Parsing Successful ---\n");
-        pritnf("\n--- Printing Abstract SYntax Tree after syntax analysis phase ---\n");
+        printf("\n--- Printing Abstract SYntax Tree after syntax analysis phase ---\n");
         if (root) print_ast(root, 0);
         printf("\n--- Performing Semantic Analysis ---\n");
         if (analyze_ast(root)) {
             printf("--- Semantic Analysis Successful ---\n");
-            printf("\n--- Final Symbol Table ---\n");
-            print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
-            printf("--- End of Symbol Table ---\n\n");
+            // printf("\n--- Final Symbol Table ---\n");
+            // print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
+            // printf("--- End of Symbol Table ---\n\n");
             printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
             if (root) print_ast(root, 0);
 

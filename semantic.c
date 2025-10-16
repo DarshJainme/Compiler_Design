@@ -6,12 +6,264 @@
 #include "parser.tab.h"
 #include "st.h"
 
-static int semantic_errors = 0;
+extern int semantic_errors;
 static Type *current_function_return_type = NULL;
 
 // Forward Declarations for Traversal
-void analyze_node(ASTNode *node);
+void analyze_node(ASTNode *node, FunctionAnalysisContext* context);
 Type *analyze_expression(ASTNode *node);
+void analyze_declaration(ASTNode *node);
+void collect_labels(ASTNode* node, FunctionAnalysisContext* context);
+void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
+
+// --- First Pass: Label Collection ---
+void collect_labels(ASTNode* node, FunctionAnalysisContext* context) {
+    if (!node) return;
+
+    switch(node->type) {
+        case NODE_LABELED_STATEMENT: {
+            char* label_name = node->data.labeled_statement.label;
+            // Check for duplicate labels
+            for (Label* l = context->labels; l; l = l->next) {
+                if (!l->is_case_label && strcmp(l->name, label_name) == 0) {
+                    fprintf(stderr, "Semantic Error (Line %d): Duplicate label '%s'.\n", node->lineno, label_name);
+                    semantic_errors++;
+                    break;
+                }
+            }
+            Label* new_label = calloc(1, sizeof(Label));
+            new_label->name = strdup(label_name);
+            new_label->is_case_label = false;
+            new_label->next = context->labels;
+            context->labels = new_label;
+            collect_labels(node->data.labeled_statement.statement, context);
+            break;
+        }
+        case NODE_CASE_STATEMENT:
+             // We don't need to collect case labels by value in this pass,
+             // just note that we are inside a switch.
+             collect_labels(node->data.case_statement.body, context);
+             break;
+        case NODE_DEFAULT_STATEMENT:
+             collect_labels(node->data.default_statement.body, context);
+             break;
+        case NODE_COMPOUND_STATEMENT:
+            for (ASTNodeList* item = node->data.compound_statement.items; item; item = item->next) {
+                collect_labels(item->node, context);
+            }
+            break;
+        case NODE_IF_STATEMENT:
+            collect_labels(node->data.if_statement.if_body, context);
+            if (node->data.if_statement.else_body) {
+                collect_labels(node->data.if_statement.else_body, context);
+            }
+            break;
+        case NODE_SWITCH_STATEMENT:
+            collect_labels(node->data.switch_statement.body, context);
+            break;
+        case NODE_WHILE_STATEMENT:
+        case NODE_DO_WHILE_STATEMENT:
+        case NODE_FOR_STATEMENT:
+            collect_labels(node->data.for_statement.body, context); // Assuming union has same member name
+            break;
+        default:
+            // Other statements (expressions, jumps) don't contain labels.
+            break;
+    }
+}
+
+
+// --- Second Pass: Full Analysis with Context ---
+void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context) {
+    if (!node) return;
+
+    switch (node->type) {
+        case NODE_COMPOUND_STATEMENT:
+            enter_scope();
+            for (ASTNodeList *item = node->data.compound_statement.items; item; item = item->next) {
+                // Use analyze_node which will delegate back to this function for statements
+                analyze_node(item->node, context); 
+            }
+            leave_scope();
+            break;
+
+        case NODE_EXPRESSION_STATEMENT:
+            if (node->data.expression_statement.expression) {
+                analyze_expression(node->data.expression_statement.expression);
+            }
+            break;
+
+        case NODE_IF_STATEMENT: {
+            Type *cond_type = analyze_expression(node->data.if_statement.condition);
+            if (cond_type && !is_scalar_type(cond_type)) { /* error */ }
+            analyze_statement_with_context(node->data.if_statement.if_body, context);
+            if (node->data.if_statement.else_body) {
+                analyze_statement_with_context(node->data.if_statement.else_body, context);
+            }
+            break;
+        }
+        case NODE_WHILE_STATEMENT:
+        case NODE_DO_WHILE_STATEMENT: {
+            Type *cond_type = analyze_expression(node->data.while_statement.condition);
+            if (node->type == NODE_WHILE_STATEMENT)
+            {
+                cond_type = analyze_expression(node->data.while_statement.condition);
+                analyze_statement_with_context(node->data.while_statement.body, context);
+            }
+            else if (node->type == NODE_DO_WHILE_STATEMENT)
+            {
+                analyze_statement_with_context(node->data.do_while_statement.body, context);
+                cond_type = analyze_expression(node->data.do_while_statement.condition);
+            }
+            if (cond_type && !is_scalar_type(cond_type))
+            {
+                fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+                semantic_errors++;
+            }
+            break;
+        }
+        case NODE_FOR_STATEMENT: {
+            context->in_loop = true;
+            enter_scope(); // Scope for the loop variable and body
+            // 1. Analyze the INIT part
+            if (node->data.for_statement.init)
+            {
+                if (node->data.for_statement.init->type == NODE_DECLARATION)
+                {
+                    // If it's a declaration, analyze it as such
+                    analyze_declaration(node->data.for_statement.init);
+                }
+                else
+                {
+                    // If it's an expression statement, unwrap and analyze the expression
+                    ASTNode *init_expr = node->data.for_statement.init->data.expression_statement.expression;
+                    if (init_expr)
+                    {
+                        analyze_expression(init_expr);
+                    }
+                }
+            }
+
+            // 2. Analyze the CONDITION part
+            if (node->data.for_statement.condition)
+            {
+                // Unwrap the expression from the expression statement
+                ASTNode *cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
+                if (cond_expr)
+                {
+                    Type *cond_type = analyze_expression(cond_expr);
+                    if (cond_type && !is_scalar_type(cond_type))
+                    {
+                        fprintf(stderr, "Semantic Error (Line %d): Condition of for-loop must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+                        semantic_errors++;
+                    }
+                }
+            }
+
+            // 3. Analyze the INCREMENT part
+            if (node->data.for_statement.increment)
+            {
+                // The increment part is a raw expression, so no unwrapping is needed here
+                analyze_expression(node->data.for_statement.increment);
+            }
+
+            // 4. Analyze the BODY
+            analyze_statement_with_context(node->data.for_statement.body, context); // Use the context-aware version
+            leave_scope();
+            context->in_loop = false;
+            break;
+        }
+
+        case NODE_SWITCH_STATEMENT: {
+            Type *cond_type = analyze_expression(node->data.switch_statement.expression);
+            if (!is_integer_type(cond_type)) { 
+                fprintf(stderr, "Semantic Error (Line %d): Condition of switch statement must be an integer type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+                semantic_errors++;
+            }
+            context->in_switch = true;
+            analyze_statement_with_context(node->data.switch_statement.body, context);
+            context->in_switch = false;
+            break;
+        }
+
+        case NODE_LABELED_STATEMENT:
+            // The label was already validated in the first pass. Just analyze the statement.
+            analyze_statement_with_context(node->data.labeled_statement.statement, context);
+            break;
+
+        case NODE_CASE_STATEMENT:
+            if (!context->in_switch) {
+                fprintf(stderr, "Semantic Error (Line %d): 'case' statement not in a switch.\n", node->lineno);
+                semantic_errors++;
+            }
+            // Analyze the constant expression and the body
+            analyze_expression(node->data.case_statement.expression);
+            analyze_statement_with_context(node->data.case_statement.body, context);
+            break;
+        case NODE_DEFAULT_STATEMENT:
+            if (!context->in_switch) {
+                fprintf(stderr, "Semantic Error (Line %d): 'default' statement not in a switch.\n", node->lineno);
+                semantic_errors++;
+            }
+            analyze_statement_with_context(node->data.default_statement.body, context);
+            break;
+
+        case NODE_GOTO_STATEMENT: {
+            bool found = false;
+            for (Label* l = context->labels; l; l = l->next) {
+                if (!l->is_case_label && strcmp(l->name, node->data.goto_statement.label) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "Semantic Error (Line %d): Use of undeclared label '%s'.\n", node->lineno, node->data.goto_statement.label);
+                semantic_errors++;
+            }
+            break;
+        }
+        case NODE_CONTINUE_STATEMENT:
+            if (!context->in_loop) {
+                fprintf(stderr, "Semantic Error (Line %d): 'continue' statement not in a loop.\n", node->lineno);
+                semantic_errors++;
+            }
+            break;
+        case NODE_BREAK_STATEMENT:
+            if (!context->in_loop && !context->in_switch) {
+                fprintf(stderr, "Semantic Error (Line %d): 'break' statement not in a loop or switch.\n", node->lineno);
+                semantic_errors++;
+            }
+            break;
+        case NODE_RETURN_STATEMENT: {
+            if (!current_function_return_type)
+            {
+                fprintf(stderr, "Semantic Error (Line %d): return statement not in a function.\n", node->lineno);
+                semantic_errors++;
+            }
+            else
+            {
+                Type *return_expr_type = node->data.return_statement.expression ? analyze_expression(node->data.return_statement.expression) : create_type(TYPE_VOID);
+                if (!are_types_compatible(current_function_return_type, return_expr_type))
+                {
+                    fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(current_function_return_type), type_to_string(return_expr_type));
+                    semantic_errors++;
+                }
+                else if (current_function_return_type->kind != return_expr_type->kind)
+                {
+                    // Insert cast node for implicit conversion
+                    node->data.return_statement.expression = create_cast_expr_node(
+                        create_typename_node(type_to_string(current_function_return_type)),
+                        node->data.return_statement.expression);
+                }
+            }
+            break;
+        }
+        
+        default:
+             break;
+    }
+}
+
 
 // Helper function to extract the name from a declarator
 const char *get_name_from_declarator(ASTNode *declarator)
@@ -124,6 +376,7 @@ int check_array_initializer(Type *array_type, ASTNode *initializer)
     }
 }
 
+// This function should be exactly as follows.
 void analyze_enum_specifier(ASTNode *node) {
     if (!node || node->type != NODE_ENUM_SPECIFIER) return;
 
@@ -132,16 +385,28 @@ void analyze_enum_specifier(ASTNode *node) {
 
     for (ASTNodeList *m = members; m; m = m->next) {
         ASTNode *member_node = m->node;
+        // The parser fix ensures this node is now NODE_ENUMERATOR
         if (member_node && member_node->type == NODE_ENUMERATOR) {
             const char *name = member_node->data.enumerator.name;
+
             if (member_node->data.enumerator.value) {
-                // For now, assume simple integer constants
-                current_value = atoi(member_node->data.enumerator.value->data.stringValue);
+                // For this assignment, we'll assume the value is a simple integer constant.
+                // A full compiler would have a function to evaluate constant expressions here.
+                ASTNode* val_node = member_node->data.enumerator.value;
+                if(val_node->type == NODE_CONSTANT) {
+                    current_value = atoi(val_node->data.stringValue);
+                } else {
+                     fprintf(stderr, "Semantic Error (Line %d): Enumerator value for '%s' is not a constant integer.\n", member_node->lineno, name);
+                     semantic_errors++;
+                }
             }
             
+            // Create an integer type for the constant
             Type *enum_const_type = create_type(TYPE_INT);
-            add_symbol(name, enum_const_type, SYM_CONSTANT); // Use SYM_CONSTANT
-            current_value++;
+            // Add the enumerator (e.g., GREEN) to the current symbol table scope
+            add_symbol(name, enum_const_type, SYM_CONSTANT);
+            
+            current_value++; // Increment for the next enumerator
         }
     }
 }
@@ -149,48 +414,52 @@ void analyze_enum_specifier(ASTNode *node) {
 void analyze_struct_or_union_specifier(ASTNode *node, Type* type_being_built) {
     if (!node || node->type != NODE_STRUCT_OR_UNION_SPECIFIER) return;
 
-    // The name of the struct/union tag (e.g., struct MyData)
-    const char* tag_name = node->data.struct_or_union_specifier.name;
-    if (tag_name) {
-        type_being_built->data.struct_union_info.name = strdup(tag_name);
-        // Add the tag to the symbol table so it can be referenced
-        add_symbol(tag_name, type_being_built, SYM_TYPEDEF);
-    }
-    
-    // Process members
+    // According to the C standard, struct/union members live in their own scope.
+    enter_scope(); 
+
+    // This is the list of 'struct_declaration' nodes.
     ASTNodeList *member_decls = node->data.struct_or_union_specifier.members;
     Member *head = NULL, *tail = NULL;
     
-    for (ASTNodeList *d = member_decls; d; d = d->next) {
-        ASTNode *decl_node = d->node;
+    // Iterate through each member declaration (e.g., 'int i;', 'float f;')
+    for (ASTNodeList *decl_item = member_decls; decl_item; decl_item = decl_item->next) {
+        ASTNode *decl_node = decl_item->node;
         if(decl_node->type != NODE_DECLARATION) continue;
 
-        Type* base_member_type = get_type_from_specifiers(decl_node->data.declaration.specifiers);
-        
-        for(ASTNodeList *declarator_list = decl_node->data.declaration.declarators; declarator_list; declarator_list = declarator_list->next) {
-            ASTNode* member_declarator = declarator_list->node;
-            // For structs, members are init_declarators, but without initializers
-            if (member_declarator->type == NODE_INIT_DECLARATOR) {
-                member_declarator = member_declarator->data.init_declarator.declarator;
-            }
-
-            const char* member_name = get_name_from_declarator(member_declarator);
-            Type* final_member_type = build_type_from_declarator(copy_type(base_member_type), member_declarator);
-
-            Member *new_member = (Member*)calloc(1, sizeof(Member));
-            new_member->name = strdup(member_name);
-            new_member->type = final_member_type;
-            
-            if (!head) {
-                head = tail = new_member;
-            } else {
-                tail->next = new_member;
-                tail = new_member;
-            }
-        }
-        free(base_member_type);
+        // **CRITICAL:** We can now re-use the main analyze_declaration function.
+        // It will add the member symbols ('i', 'f') to the *current scope*, 
+        // which is the temporary scope we just created for the union.
+        analyze_declaration(decl_node);
     }
+
+    // Now, copy the symbols from the temporary scope into the Member list for the Type.
+    Scope* member_scope = get_current_scope();
+    for (int i = 0; i < member_scope->symbol_count; i++) {
+        Symbol* member_symbol = member_scope->symbols[i];
+        
+        Member *new_member = (Member*)calloc(1, sizeof(Member));
+        new_member->name = strdup(member_symbol->name);
+        new_member->type = copy_type(member_symbol->type); // Important to copy
+        
+        if (!head) {
+            head = tail = new_member;
+        } else {
+            tail->next = new_member;
+            tail = new_member;
+        }
+    }
+    
+    leave_scope(); // Destroy the temporary scope for the members.
+
+    // Attach the completed member list to the union's type information.
     type_being_built->data.struct_union_info.members = head;
+
+    // Finally, if the struct/union has a tag name (like 'Data'), add it to the PARENT scope.
+    const char* tag_name = node->data.struct_or_union_specifier.name;
+    if (tag_name) {
+        // We must add the type to the outer scope, not the member scope we just left.
+        add_symbol(tag_name, type_being_built, SYM_TYPEDEF);
+    }
 }
 
 
@@ -314,168 +583,175 @@ void analyze_declaration(ASTNode *node)
     free(base_type);
 }
 
+// In semantic.c, replace the entire function
 void analyze_function_definition(ASTNode *node)
 {
     Type *return_type = get_type_from_specifiers(node->data.function_definition.specifiers);
     const char *name = get_name_from_declarator(node->data.function_definition.declarator);
-
-    if (!name)
-    {
+    if (!name) { 
         fprintf(stderr, "Semantic Error (Line %d): Function definition is missing a name.\n", node->lineno);
         semantic_errors++;
-        return;
+        return; 
     }
 
-    Type *func_type = create_type(TYPE_FUNCTION);
-    func_type->data.function_sig.return_type = return_type;
-
-    // Add function to parent scope before processing body to allow recursion
+    Type *func_type = build_type_from_declarator(return_type, node->data.function_definition.declarator);
     add_symbol(name, func_type, SYM_FUNCTION);
 
-    // Now process body
+    // --- NEW TWO-PASS ANALYSIS ---
+    FunctionAnalysisContext context = {0};
+    context.return_type = func_type->data.function_sig.return_type;
+
+    // 1. First Pass: Collect all labels (goto, case, default)
+    collect_labels(node->data.function_definition.body, &context);
+    
+    // 2. Second Pass: Full statement analysis
     enter_scope();
-    current_function_return_type = return_type;
-
-    // Add function parameters to the new scope
     add_function_parameters(node->data.function_definition.declarator);
-
-    analyze_node(node->data.function_definition.body);
-
-    current_function_return_type = NULL;
+    analyze_statement_with_context(node->data.function_definition.body, &context);
     leave_scope();
-}
 
-void analyze_statement(ASTNode *node)
-{
-    if (!node)
-        return;
-
-    switch (node->type)
-    {
-    case NODE_COMPOUND_STATEMENT:
-        enter_scope();
-        for (ASTNodeList *item = node->data.compound_statement.items; item; item = item->next)
-        {
-            analyze_node(item->node);
-        }
-        leave_scope();
-        break;
-    case NODE_EXPRESSION_STATEMENT:
-        if (node->data.expression_statement.expression)
-        {
-            analyze_expression(node->data.expression_statement.expression);
-        }
-        break;
-    case NODE_FOR_STATEMENT:
-    {
-        enter_scope(); // Scope for the loop variable and body
-
-        // 1. Analyze the INIT part
-        if (node->data.for_statement.init)
-        {
-            if (node->data.for_statement.init->type == NODE_DECLARATION)
-            {
-                // If it's a declaration, analyze it as such
-                analyze_declaration(node->data.for_statement.init);
-            }
-            else
-            {
-                // If it's an expression statement, unwrap and analyze the expression
-                ASTNode *init_expr = node->data.for_statement.init->data.expression_statement.expression;
-                if (init_expr)
-                {
-                    analyze_expression(init_expr);
-                }
-            }
-        }
-
-        // 2. Analyze the CONDITION part
-        if (node->data.for_statement.condition)
-        {
-            // Unwrap the expression from the expression statement
-            ASTNode *cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
-            if (cond_expr)
-            {
-                Type *cond_type = analyze_expression(cond_expr);
-                if (cond_type && !is_scalar_type(cond_type))
-                {
-                    fprintf(stderr, "Semantic Error (Line %d): Condition of for-loop must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
-                    semantic_errors++;
-                }
-            }
-        }
-
-        // 3. Analyze the INCREMENT part
-        if (node->data.for_statement.increment)
-        {
-            // The increment part is a raw expression, so no unwrapping is needed here
-            analyze_expression(node->data.for_statement.increment);
-        }
-
-        // 4. Analyze the BODY
-        analyze_statement(node->data.for_statement.body);
-
-        leave_scope(); // Exit the loop's scope
-        break;
-    }
-
-    case NODE_IF_STATEMENT:
-    case NODE_WHILE_STATEMENT:
-    case NODE_DO_WHILE_STATEMENT:
-    {
-        Type *cond_type = NULL;
-        if (node->type == NODE_IF_STATEMENT)
-        {
-            cond_type = analyze_expression(node->data.if_statement.condition);
-            analyze_statement(node->data.if_statement.if_body);
-            if (node->data.if_statement.else_body)
-                analyze_statement(node->data.if_statement.else_body);
-        }
-        else if (node->type == NODE_WHILE_STATEMENT)
-        {
-            cond_type = analyze_expression(node->data.while_statement.condition);
-            analyze_statement(node->data.while_statement.body);
-        }
-        else if (node->type == NODE_DO_WHILE_STATEMENT)
-        {
-            analyze_statement(node->data.do_while_statement.body);
-            cond_type = analyze_expression(node->data.do_while_statement.condition);
-        }
-        if (cond_type && !is_scalar_type(cond_type))
-        {
-            fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
-            semantic_errors++;
-        }
-        break;
-    }
-    case NODE_RETURN_STATEMENT:
-        if (!current_function_return_type)
-        {
-            fprintf(stderr, "Semantic Error (Line %d): return statement not in a function.\n", node->lineno);
-            semantic_errors++;
-        }
-        else
-        {
-            Type *return_expr_type = node->data.return_statement.expression ? analyze_expression(node->data.return_statement.expression) : create_type(TYPE_VOID);
-            if (!are_types_compatible(current_function_return_type, return_expr_type))
-            {
-                fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(current_function_return_type), type_to_string(return_expr_type));
-                semantic_errors++;
-            }
-            else if (current_function_return_type->kind != return_expr_type->kind)
-            {
-                // Insert cast node for implicit conversion
-                node->data.return_statement.expression = create_cast_expr_node(
-                    create_typename_node(type_to_string(current_function_return_type)),
-                    node->data.return_statement.expression);
-            }
-        }
-        break;
-    default:
-        // For simple statements like break, continue, etc., there's no analysis needed.
-        break;
+    // Free the collected labels
+    Label* current = context.labels;
+    while(current) {
+        Label* next = current->next;
+        free(current->name);
+        free(current);
+        current = next;
     }
 }
+
+
+// void analyze_statement(ASTNode *node)
+// {
+//     if (!node)
+//         return;
+
+//     switch (node->type)
+//     {
+//     case NODE_COMPOUND_STATEMENT:
+//         enter_scope();
+//         for (ASTNodeList *item = node->data.compound_statement.items; item; item = item->next)
+//         {
+//             analyze_node(item->node);
+//         }
+//         leave_scope();
+//         break;
+//     case NODE_EXPRESSION_STATEMENT:
+//         if (node->data.expression_statement.expression)
+//         {
+//             analyze_expression(node->data.expression_statement.expression);
+//         }
+//         break;
+//     case NODE_FOR_STATEMENT:
+//     {
+//         enter_scope(); // Scope for the loop variable and body
+
+//         // 1. Analyze the INIT part
+//         if (node->data.for_statement.init)
+//         {
+//             if (node->data.for_statement.init->type == NODE_DECLARATION)
+//             {
+//                 // If it's a declaration, analyze it as such
+//                 analyze_declaration(node->data.for_statement.init);
+//             }
+//             else
+//             {
+//                 // If it's an expression statement, unwrap and analyze the expression
+//                 ASTNode *init_expr = node->data.for_statement.init->data.expression_statement.expression;
+//                 if (init_expr)
+//                 {
+//                     analyze_expression(init_expr);
+//                 }
+//             }
+//         }
+
+//         // 2. Analyze the CONDITION part
+//         if (node->data.for_statement.condition)
+//         {
+//             // Unwrap the expression from the expression statement
+//             ASTNode *cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
+//             if (cond_expr)
+//             {
+//                 Type *cond_type = analyze_expression(cond_expr);
+//                 if (cond_type && !is_scalar_type(cond_type))
+//                 {
+//                     fprintf(stderr, "Semantic Error (Line %d): Condition of for-loop must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+//                     semantic_errors++;
+//                 }
+//             }
+//         }
+
+//         // 3. Analyze the INCREMENT part
+//         if (node->data.for_statement.increment)
+//         {
+//             // The increment part is a raw expression, so no unwrapping is needed here
+//             analyze_expression(node->data.for_statement.increment);
+//         }
+
+//         // 4. Analyze the BODY
+//         analyze_statement(node->data.for_statement.body);
+
+//         leave_scope(); // Exit the loop's scope
+//         break;
+//     }
+
+//     case NODE_IF_STATEMENT:
+//     case NODE_WHILE_STATEMENT:
+//     case NODE_DO_WHILE_STATEMENT:
+//     {
+//         Type *cond_type = NULL;
+//         if (node->type == NODE_IF_STATEMENT)
+//         {
+//             cond_type = analyze_expression(node->data.if_statement.condition);
+//             analyze_statement(node->data.if_statement.if_body);
+//             if (node->data.if_statement.else_body)
+//                 analyze_statement(node->data.if_statement.else_body);
+//         }
+//         else if (node->type == NODE_WHILE_STATEMENT)
+//         {
+//             cond_type = analyze_expression(node->data.while_statement.condition);
+//             analyze_statement(node->data.while_statement.body);
+//         }
+//         else if (node->type == NODE_DO_WHILE_STATEMENT)
+//         {
+//             analyze_statement(node->data.do_while_statement.body);
+//             cond_type = analyze_expression(node->data.do_while_statement.condition);
+//         }
+//         if (cond_type && !is_scalar_type(cond_type))
+//         {
+//             fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+//             semantic_errors++;
+//         }
+//         break;
+//     }
+//     case NODE_RETURN_STATEMENT:
+//         if (!current_function_return_type)
+//         {
+//             fprintf(stderr, "Semantic Error (Line %d): return statement not in a function.\n", node->lineno);
+//             semantic_errors++;
+//         }
+//         else
+//         {
+//             Type *return_expr_type = node->data.return_statement.expression ? analyze_expression(node->data.return_statement.expression) : create_type(TYPE_VOID);
+//             if (!are_types_compatible(current_function_return_type, return_expr_type))
+//             {
+//                 fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(current_function_return_type), type_to_string(return_expr_type));
+//                 semantic_errors++;
+//             }
+//             else if (current_function_return_type->kind != return_expr_type->kind)
+//             {
+//                 // Insert cast node for implicit conversion
+//                 node->data.return_statement.expression = create_cast_expr_node(
+//                     create_typename_node(type_to_string(current_function_return_type)),
+//                     node->data.return_statement.expression);
+//             }
+//         }
+//         break;
+//     default:
+//         // For simple statements like break, continue, etc., there's no analysis needed.
+//         break;
+//     }
+// }
 
 Type *analyze_expression(ASTNode *node)
 {
@@ -683,6 +959,15 @@ Type *analyze_expression(ASTNode *node)
         Type *object_type = analyze_expression(node->data.member_access.object);
         const char *member_name = node->data.member_access.member_name;
 
+        if (node->data.member_access.is_pointer) {
+            if (object_type->kind != TYPE_POINTER) {
+                fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a pointer to a structure or union.\n", node->lineno, member_name);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+            object_type = object_type->data.base; // Dereference the pointer to get the struct/union type
+        }
+
         if (object_type->kind != TYPE_STRUCT && object_type->kind != TYPE_UNION) {
             fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a structure or union.\n", node->lineno, member_name);
             semantic_errors++;
@@ -705,7 +990,7 @@ Type *analyze_expression(ASTNode *node)
     }
 }
 
-void analyze_node(ASTNode *node)
+void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass context down
 {
     if (!node)
         return;
@@ -714,7 +999,7 @@ void analyze_node(ASTNode *node)
     case NODE_TRANSLATION_UNIT:
         for (ASTNodeList *item = node->data.items_list; item; item = item->next)
         {
-            analyze_node(item->node);
+            analyze_node(item->node, NULL); // FIX: Pass NULL context for global scope
         }
         break;
     case NODE_DECLARATION:
@@ -726,7 +1011,9 @@ void analyze_node(ASTNode *node)
     default:
         // If it's a statement, analyze it as such.
         // Expressions are handled recursively by statement analyzers.
-        analyze_statement(node);
+        if (context) { // FIX: Only call this if we are inside a function
+             analyze_statement_with_context(node, context);
+        }
         break;
     }
 }
@@ -737,6 +1024,6 @@ int analyze_ast(ASTNode *root)
         return 1; // Nothing to analyze
     semantic_errors = 0;
     init_symbol_table();
-    analyze_node(root);
+    analyze_node(root, NULL);
     return semantic_errors == 0;
 }
