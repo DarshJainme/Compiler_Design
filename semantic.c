@@ -62,6 +62,7 @@ void collect_labels(ASTNode* node, FunctionAnalysisContext* context) {
             collect_labels(node->data.switch_statement.body, context);
             break;
         case NODE_WHILE_STATEMENT:
+        case NODE_UNTIL_STATEMENT: 
         case NODE_DO_WHILE_STATEMENT:
         case NODE_FOR_STATEMENT:
             collect_labels(node->data.for_statement.body, context); // Assuming union has same member name
@@ -103,6 +104,7 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
             break;
         }
         case NODE_WHILE_STATEMENT:
+        case NODE_UNTIL_STATEMENT:
         case NODE_DO_WHILE_STATEMENT: {
             bool was_in_loop = context->in_loop; // Save previous state
             context->in_loop = true;
@@ -112,6 +114,11 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
             {
                 cond_type = analyze_expression(node->data.while_statement.condition);
                 analyze_statement_with_context(node->data.while_statement.body, context);
+            }
+            else if (node->type == NODE_UNTIL_STATEMENT)
+            {
+                cond_type = analyze_expression(node->data.until_statement.condition);
+                analyze_statement_with_context(node->data.until_statement.body, context);
             }
             else // NODE_DO_WHILE_STATEMENT
             {

@@ -180,12 +180,12 @@ unary_expression
     : postfix_expression
     | INC_OP unary_expression      { $$ = create_unary_expr_node(INC_OP, $2); $$->type = NODE_PREFIX_UNARY_EXPR; }
     | DEC_OP unary_expression      { $$ = create_unary_expr_node(DEC_OP, $2); $$->type = NODE_PREFIX_UNARY_EXPR; }
-    | '&' cast_expression { $$ = create_unary_expr_node('&', $2); }
-    | '*' cast_expression { $$ = create_unary_expr_node('*', $2); }
-    | '+' cast_expression { $$ = create_unary_expr_node('+', $2); }
-    | '-' cast_expression { $$ = create_unary_expr_node('-', $2); }
-    | '~' cast_expression { $$ = create_unary_expr_node('~', $2); }
-    | '!' cast_expression { $$ = create_unary_expr_node('!', $2); }
+    | '&' cast_expression          { $$ = create_unary_expr_node('&', $2); }
+    | '*' cast_expression          { $$ = create_unary_expr_node('*', $2); }
+    | '+' cast_expression          { $$ = create_unary_expr_node('+', $2); }
+    | '-' cast_expression          { $$ = create_unary_expr_node('-', $2); }
+    | '~' cast_expression          { $$ = create_unary_expr_node('~', $2); }
+    | '!' cast_expression          { $$ = create_unary_expr_node('!', $2); }
     | SIZEOF unary_expression      { $$ = create_unary_expr_node(SIZEOF, $2); }
     | SIZEOF '(' type_name ')'     { $$ = create_unary_expr_node(SIZEOF, $3); }
     | new_expression               { $$ = $1; }
@@ -342,12 +342,14 @@ block_item_list
     : block_item
         { $$ = create_list_node($1); }
     | block_item_list block_item
-        { $$ = append_to_list($1, $2); }
+        { $$ = append_to_list($1, $2); else $$ = $1; }
+        // adding error recovery
     ;
 
 block_item
     : declaration { $$ = $1; }
     | statement   { $$ = $1; }
+    | error ';'   { yyerrok; $$ = NULL; } // for error part
     ;
 
 expression_statement
