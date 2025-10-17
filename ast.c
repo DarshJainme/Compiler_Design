@@ -244,11 +244,11 @@ ASTNode* create_reference_declarator_node(ASTNode* base_declarator) {
     node->data.reference_declarator.base_declarator = base_declarator;
     return node;
 }
-ASTNode* create_struct_union_node(int kind, char* name, ASTNodeList* members){
+ASTNode* create_struct_or_union_specifier_node(int kind, char* name, ASTNodeList* members){
     ASTNode* node = create_node(NODE_STRUCT_OR_UNION_SPECIFIER);
-    node->data.struct_union_specifier.kind = kind;
-    node->data.struct_union_specifier.name = name ? strdup(name) : NULL;
-    node->data.struct_union_specifier.members = members;
+    node->data.struct_or_union_specifier.kind = kind;
+    node->data.struct_or_union_specifier.name = name ? strdup(name) : NULL;
+    node->data.struct_or_union_specifier.members = members;
     return node;
 }
 ASTNode* create_class_node(char* name, ASTNodeList* base_classes, ASTNodeList* members){
@@ -293,7 +293,17 @@ ASTNode* create_delete_expr_node(ASTNode* expr){
     node->data.delete_expr.expr = expr;
     return node;
 }
-
+ASTNode *create_enumerator_node(char *name, ASTNode *value) {
+    ASTNode *node = create_node(NODE_ENUMERATOR);
+    node->data.enumerator.name = name;
+    node->data.enumerator.value = value;
+    return node;
+}
+ASTNode *create_initializer_list_node(ASTNodeList *items) {
+    ASTNode *node = create_node(NODE_INITIALIZER_LIST);
+    node->data.items_list = items;
+    return node;
+}
 ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier) {
     ASTNode* node = create_node(NODE_QUALIFIED_ID);
     node->data.qualified_id.qualifiers = qualifiers;
@@ -354,7 +364,7 @@ void print_ast(ASTNode* node, int indent) {
             print_ast(node->data.qualified_id.identifier, indent + 2);
             break;
         case NODE_CONSTANT: printf("Constant: %s\n", node->data.stringValue); break;
-        case NODE_STRING_LITERAL: printf("String Literal: \"%s\"\n", node->data.stringValue); break;
+        case NODE_STRING_LITERAL: printf("String Literal: %s\n", node->data.stringValue); break;
         case NODE_TYPENAME: printf("Typename: %s\n", node->data.stringValue); break;
         case NODE_EXPRESSION_STATEMENT:
             printf("Expression Statement [line %d]\n", node->lineno);
@@ -552,7 +562,34 @@ void print_ast(ASTNode* node, int indent) {
             print_indent(indent + 2); printf("Condition:\n");
             print_ast(node->data.do_while_statement.condition, indent+4);
             break;
+        case NODE_SWITCH_STATEMENT:
+            printf("Switch Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Expression:\n");
+            print_ast(node->data.switch_statement.expression, indent + 2);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.switch_statement.body, indent + 2);
+            break;
+        case NODE_CASE_STATEMENT:
+            printf("Case Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Value:\n");
+            print_ast(node->data.case_statement.expression, indent + 2);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.case_statement.body, indent + 2);
+            break;
+        case NODE_DEFAULT_STATEMENT:
+            printf("Default Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.default_statement.body, indent + 2);
+            break;
 
+        case NODE_LABELED_STATEMENT:
+            printf("Labeled Statement (label: %s) [line %d]\n", node->data.labeled_statement.label, node->lineno);
+            print_ast(node->data.labeled_statement.statement, indent + 1);
+            break;
+
+        case NODE_GOTO_STATEMENT:
+            printf("Goto Statement (label: %s) [line %d]\n", node->data.goto_statement.label, node->lineno);
+            break;
         case NODE_BREAK_STATEMENT: printf("Break Statement\n"); break;
         case NODE_CONTINUE_STATEMENT: printf("Continue Statement\n"); break;
         
@@ -582,6 +619,65 @@ void print_ast(ASTNode* node, int indent) {
             
         case NODE_ACCESS_SPECIFIER:
             printf("Access Specifier: %s\n", token_to_string(node->data.specifier));
+            break;
+        
+        case NODE_CAST_EXPRESSION:
+            printf("Cast Expression [line %d]\n", node->lineno);
+            print_indent(indent + 1);
+            printf("Type:\n");
+            // The 'type_name' node itself is a declaration node, so we can print it
+            print_ast(node->data.cast_expr.type_name, indent + 2); 
+            print_indent(indent + 1);
+            printf("Expr:\n");
+            print_ast(node->data.cast_expr.expr, indent + 2);
+            break;
+        case NODE_ARRAY_SUBSCRIPT:
+            printf("Array Subscript [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Array:\n");
+            print_ast(node->data.array_subscript.array, indent + 2);
+            print_indent(indent + 1); printf("Index:\n");
+            print_ast(node->data.array_subscript.index, indent + 2);
+            break;
+            
+        case NODE_MEMBER_ACCESS:
+            printf("Member Access (op: %s) [line %d]\n", node->data.member_access.is_pointer ? "->" : ".", node->lineno);
+            print_indent(indent + 1); printf("Object:\n");
+            print_ast(node->data.member_access.object, indent + 2);
+            print_indent(indent + 1); printf("Member: %s\n", node->data.member_access.member_name);
+            break;
+
+        case NODE_INITIALIZER_LIST:
+            printf("Initializer List [line %d]\n", node->lineno);
+            for (ASTNodeList* item = node->data.items_list; item; item = item->next) {
+                print_ast(item->node, indent + 1);
+            }
+            break;
+
+        case NODE_ENUM_SPECIFIER:
+            printf("Enum Specifier: %s [line %d]\n", node->data.enum_specifier.name ? node->data.enum_specifier.name : "(anonymous)", node->lineno);
+            for (ASTNodeList* item = node->data.enum_specifier.members; item; item = item->next) {
+                print_ast(item->node, indent + 1);
+            }
+            break;
+        
+        case NODE_ENUMERATOR:
+            printf("Enumerator: %s\n", node->data.enumerator.name);
+            if (node->data.enumerator.value) {
+                print_indent(indent + 1); printf("Value:\n");
+                print_ast(node->data.enumerator.value, indent + 2);
+            }
+            break;
+            
+        case NODE_STRUCT_OR_UNION_SPECIFIER:
+            printf("%s Specifier: %s [line %d]\n", 
+                   node->data.struct_or_union_specifier.kind == STRUCT ? "Struct" : "Union", 
+                   node->data.struct_or_union_specifier.name ? node->data.struct_or_union_specifier.name : "(anonymous)", 
+                   node->lineno);
+            if(node->data.struct_or_union_specifier.members) {
+                 for (ASTNodeList* item = node->data.struct_or_union_specifier.members; item; item = item->next) {
+                    print_ast(item->node, indent + 1);
+                }
+            }
             break;
 
         default:

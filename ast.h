@@ -4,6 +4,8 @@
 // Enum to identify the type of AST node
 typedef enum {
     // Literals and identifiers
+    NODE_UNKNOWN = 0,
+    NODE_TRANSLATION_UNIT,
     NODE_IDENTIFIER,
     NODE_CONSTANT,
     NODE_STRING_LITERAL,
@@ -62,6 +64,7 @@ typedef enum {
     NODE_POINTER,
     NODE_STRUCT_OR_UNION_SPECIFIER,
     NODE_ENUM_SPECIFIER,
+    NODE_ENUMERATOR,   // for RED, GREEN, BLUE in an enum list
     
     // Class-related nodes
     NODE_CLASS_SPECIFIER,
@@ -71,18 +74,23 @@ typedef enum {
     // added for scope operators
     NODE_QUALIFIED_ID,
     // Utility nodes
-    NODE_TRANSLATION_UNIT, // Root of the AST
     NODE_ARGUMENT_LIST,    // Generic list for function arguments
     NODE_LIST_ITEM         // Generic list for everything else
 } NodeType;
 
 struct ASTNode;
-
 // A generic list node
 typedef struct ASTNodeList {
     struct ASTNode* node;
     struct ASTNodeList* next;
 } ASTNodeList;
+
+// this struct will be used inside the type system for structs/unions
+typedef struct Member {
+    char *name;
+    struct Type *type;
+    struct Member *next;
+} Member;
 
 // Main AST node structure
 typedef struct ASTNode {
@@ -92,7 +100,6 @@ typedef struct ASTNode {
     union {
         // Literals and identifiers
         char* stringValue; // For identifiers, constants, string literals
-
         // Expressions
         struct {
             struct ASTNode* left;
@@ -271,12 +278,18 @@ typedef struct ASTNode {
             int kind; // STRUCT or UNION token
             char* name;
             ASTNodeList* members;
-        } struct_union_specifier;
+        } struct_or_union_specifier;
 
         struct {
-            char* name;
-            ASTNodeList* members;
+            char *name;
+            ASTNodeList *members;
         } enum_specifier;
+
+        // Add this new struct for an enumerator member
+        struct {
+            char *name;
+            struct ASTNode *value; // Can be NULL
+        } enumerator;
 
         struct {
             char* name;
@@ -298,6 +311,7 @@ typedef struct ASTNode {
 
     } data;
 } ASTNode;
+
 
 // Helper functions to create various AST nodes
 ASTNode* create_node(NodeType type);
@@ -339,8 +353,8 @@ ASTNode* create_pointer_node(ASTNodeList* qualifiers, ASTNode* next);
 ASTNode* create_pointer_declarator_node(ASTNode* pointer, ASTNode* base_declarator);
 ASTNode* create_array_declarator_node(ASTNode* base_declarator, ASTNode* size);
 ASTNode* create_function_declarator_node(ASTNode* base_declarator, ASTNodeList* params);
-ASTNode* create_reference_declarator_node(ASTNode* base_declarator); // <-- Add this line
-ASTNode* create_struct_union_node(int kind, char* name, ASTNodeList* members);
+ASTNode* create_reference_declarator_node(ASTNode* base_declarator);
+ASTNode* create_struct_or_union_specifier_node(int kind, char* name, ASTNodeList* members);
 ASTNode* create_class_node(char* name, ASTNodeList* base_classes, ASTNodeList* members);
 ASTNode* create_access_specifier_node(int specifier);
 ASTNode* create_base_class_node(int specifier, ASTNode* class_name);
@@ -348,6 +362,8 @@ ASTNode* create_enum_specifier_node(char* name, ASTNodeList* members);
 ASTNode* create_lambda_node(ASTNodeList* capture, ASTNodeList* params, ASTNode* body);
 ASTNode* create_new_expr_node(ASTNode* type_name, ASTNode* initializer);
 ASTNode* create_delete_expr_node(ASTNode* expr);
+ASTNode *create_enumerator_node(char *name, ASTNode *value);
+ASTNode *create_initializer_list_node(ASTNodeList *items);
 // added for the scope resoluion operator.
 ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier);
 

@@ -38,8 +38,8 @@ run: $(TARGET)
 	./$(TARGET) test/test3.c
 
 clean:
-# ifeq ($(OS),Windows_NT)
-# 	del /f /q $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) $(COMPILER_EXECUTABLE) parser.output
-# else
+ifeq ($(OS),Windows_NT)
+	del /f /q $(LEX_C) $(YACC_C) $(YACC_H) $(COMPILER_EXECUTABLE) parser.output
+else
 	rm -f $(LEX_C) $(YACC_C) $(YACC_H) $(TARGET) $(COMPILER_EXECUTABLE) parser.output
-# endif
+endif
