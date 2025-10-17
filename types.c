@@ -27,6 +27,12 @@ Type* create_pointer_type(Type* base) {
     return ptr_type;
 }
 
+Type* create_reference_type(Type* base) {
+    Type* ref_type = create_type(TYPE_REFERENCE);
+    ref_type->data.base = base;
+    return ref_type;
+}
+
 Type* create_array_type(Type* base, int size) {
     Type* arr_type = create_type(TYPE_ARRAY);
     arr_type->data.base = base;
@@ -52,6 +58,9 @@ char* type_to_string_recursive(Type* type, char* buffer) {
         case TYPE_DOUBLE: strcat(temp, "double"); break;
         case TYPE_POINTER:
             sprintf(buffer, "%s*", type_to_string_recursive(type->data.base, temp));
+            return buffer;
+        case TYPE_REFERENCE:
+            sprintf(buffer, "%s&", type_to_string_recursive(type->data.base, temp));
             return buffer;
         case TYPE_ARRAY:
             sprintf(buffer, "%s[]", type_to_string_recursive(type->data.base, temp));
@@ -113,6 +122,10 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
             case NODE_POINTER_DECLARATOR:
                 final_type = create_pointer_type(final_type);
                 current = current->data.pointer_declarator.base_declarator;
+                break;
+            case NODE_REFERENCE_DECLARATOR:
+                final_type = create_reference_type(final_type);
+                current = current->data.reference_declarator.base_declarator;
                 break;
             case NODE_ARRAY_DECLARATOR:
                 final_type = create_array_type(final_type, 0); // Size not handled yet

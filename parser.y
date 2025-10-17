@@ -80,6 +80,9 @@ int is_typename(const char* name) {
 %type <list> block_item_list
 %type <node> block_item
 
+%type <node> qualified_id
+%type <list> nested_name_specifier
+
 %type <node> declaration function_definition
 %type <list> declaration_specifiers init_declarator_list
 %type <node> init_declarator declarator direct_declarator ptr_operator
@@ -144,6 +147,7 @@ function_definition
 /* --- Expressions --- */
 primary_expression
     : IDENTIFIER        { $$ = create_identifier_node($1); }
+    | qualified_id      { $$ = $1; }
     | CONSTANT          { $$ = create_constant_node($1); }
     | STRING_LITERAL    { $$ = create_string_literal_node($1); }
     | CHAR_LITERAL      { $$ = create_constant_node($1); }
@@ -293,15 +297,19 @@ constant_expression
     : conditional_expression
     ;
 
-/* Advanced C++ style Expressions */
+// Add scope operator
 new_expression
     : NEW type_name '(' ')' { $$ = create_new_expr_node($2, NULL); }
     | NEW type_name         { $$ = create_new_expr_node($2, NULL); }
     | NEW type_name initializer { $$ = create_new_expr_node($2, $3); }
+    | SCOPE_OP NEW type_name '(' ')' { $$ = create_new_expr_node($3, NULL); /* Mark as global */ }
+    | SCOPE_OP NEW type_name         { $$ = create_new_expr_node($3, NULL); /* Mark as global */ }
+    | SCOPE_OP NEW type_name initializer { $$ = create_new_expr_node($3, $4); /* Mark as global */ }
     ;
 
 delete_expression
     : DELETE cast_expression { $$ = create_delete_expr_node($2); }
+    | SCOPE_OP DELETE cast_expression { $$ = create_delete_expr_node($3); /* Mark as global */ }
     ;
 
 lambda_expression
@@ -374,7 +382,7 @@ jump_statement
 declaration
     : declaration_specifiers ';' { $$ = create_declaration_node($1, NULL); }
     | declaration_specifiers init_declarator_list ';' { $$ = create_declaration_node($1, $2); }
-    | CLASS IDENTIFIER ';' { $$ = create_class_node($2, NULL, NULL); }
+    | CLASS IDENTIFIER ';' { add_typename($2); $$ = create_class_node($2, NULL, NULL); }
     // we added this as we wanted to add forward declaration
     ;
 
@@ -521,15 +529,36 @@ class_member
     | access_specifier ':' { $$ = $1; }
     ;
 
+// adding scope resolution
+nested_name_specifier
+    : IDENTIFIER SCOPE_OP                       { $$ = create_list_node(create_identifier_node($1)); }
+    | TYPE_NAME SCOPE_OP                        { $$ = create_list_node(create_typename_node($1)); }
+    | nested_name_specifier IDENTIFIER SCOPE_OP { $$ = append_to_list($1, create_identifier_node($2)); }
+    | nested_name_specifier TYPE_NAME SCOPE_OP  { $$ = append_to_list($1, create_typename_node($2)); }
+    ;
+
+qualified_id
+    : nested_name_specifier IDENTIFIER          { $$ = create_qualified_id_node($1, create_identifier_node($2)); }
+    | nested_name_specifier TYPE_NAME           { $$ = create_qualified_id_node($1, create_typename_node($2)); }
+    ;
 /* --- Declarators --- */
 declarator
-    : ptr_operator declarator { $$ = create_pointer_declarator_node($1, $2); }
+    : ptr_operator declarator                   { 
+                                                    // Check what kind of node the ptr_operator created
+                                                    if ($1->type == NODE_POINTER) {
+                                                        $$ = create_pointer_declarator_node($1, $2);
+                                                    } else { // It must be a reference
+                                                        $$ = create_reference_declarator_node($2);
+                                                        free($1); // Free the temporary specifier node
+                                                    }
+                                                }
     // | '&' direct_declarator     { $$ = create_pointer_declarator_node(create_specifier_node('&'), $2); } /* C++ Reference handled separately */
     | direct_declarator
     ;
 
 direct_declarator
     : IDENTIFIER                                { $$ = create_identifier_node($1); }
+    | qualified_id                              { $$ = $1; }
     | '(' declarator ')'                        { $$ = $2; }
     | direct_declarator '[' constant_expression ']' { $$ = create_array_declarator_node($1, $3); }
     | direct_declarator '[' ']'                 { $$ = create_array_declarator_node($1, NULL); }

@@ -18,6 +18,7 @@ typedef enum {
     TYPE_FUNCTION,
     TYPE_STRUCT_UNION,
     TYPE_ENUM,
+    TYPE_REFERENCE,
     TYPE_UNKNOWN
 } TypeKind;
 
@@ -56,6 +57,7 @@ Type* copy_type(Type* type);
 
 // Type construction helpers
 Type* create_pointer_type(Type* base);
+Type* create_reference_type(Type* base);
 Type* create_array_type(Type* base, int size);
 Type* build_type_from_declarator(Type* base_type, ASTNode* declarator);
 

@@ -51,6 +51,7 @@ typedef enum {
     NODE_POINTER_DECLARATOR,
     NODE_ARRAY_DECLARATOR,
     NODE_FUNCTION_DECLARATOR,
+    NODE_REFERENCE_DECLARATOR,
     
     // Specifiers and Qualifiers
     NODE_SPECIFIER,
@@ -66,6 +67,8 @@ typedef enum {
     NODE_ACCESS_SPECIFIER,
     NODE_BASE_CLASS,
 
+    // added for scope operators
+    NODE_QUALIFIED_ID,
     // Utility nodes
     NODE_TRANSLATION_UNIT, // Root of the AST
     NODE_ARGUMENT_LIST,    // Generic list for function arguments
@@ -245,6 +248,10 @@ typedef struct ASTNode {
             struct ASTNode* pointer;
             struct ASTNode* base_declarator;
         } pointer_declarator;
+
+        struct {
+            struct ASTNode* base_declarator;
+        } reference_declarator;// for pass by refeerence operarator
         
         struct {
             ASTNodeList* qualifiers;
@@ -276,6 +283,10 @@ typedef struct ASTNode {
             struct ASTNode* class_name;
         } base_class;
 
+        struct {
+            ASTNodeList* qualifiers;
+            struct ASTNode* identifier;
+        } qualified_id;
         // Generic list for the root and other lists
         ASTNodeList* items_list;
 
@@ -321,6 +332,7 @@ ASTNode* create_pointer_node(ASTNodeList* qualifiers, ASTNode* next);
 ASTNode* create_pointer_declarator_node(ASTNode* pointer, ASTNode* base_declarator);
 ASTNode* create_array_declarator_node(ASTNode* base_declarator, ASTNode* size);
 ASTNode* create_function_declarator_node(ASTNode* base_declarator, ASTNodeList* params);
+ASTNode* create_reference_declarator_node(ASTNode* base_declarator); // <-- Add this line
 ASTNode* create_struct_union_node(int kind, char* name, ASTNodeList* members);
 ASTNode* create_class_node(char* name, ASTNodeList* base_classes, ASTNodeList* members);
 ASTNode* create_access_specifier_node(int specifier);
@@ -329,6 +341,8 @@ ASTNode* create_enum_specifier_node(char* name, ASTNodeList* members);
 ASTNode* create_lambda_node(ASTNodeList* capture, ASTNodeList* params, ASTNode* body);
 ASTNode* create_new_expr_node(ASTNode* type_name, ASTNode* initializer);
 ASTNode* create_delete_expr_node(ASTNode* expr);
+// added for the scope resoluion operator.
+ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier);
 
 // Function to print the AST for debugging
 void print_ast(ASTNode* node, int indent);

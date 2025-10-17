@@ -19,8 +19,13 @@ const char* get_name_from_declarator(ASTNode* declarator) {
     while (current) {
         if (current->type == NODE_IDENTIFIER) {
             return current->data.stringValue;
+        } else if (current->type == NODE_QUALIFIED_ID) {
+            // For a qualified ID, the "name" is the final identifier in the chain.
+            return get_name_from_declarator(current->data.qualified_id.identifier);
         } else if (current->type == NODE_POINTER_DECLARATOR) {
             current = current->data.pointer_declarator.base_declarator;
+        } else if (current->type == NODE_REFERENCE_DECLARATOR) {
+            current = current->data.reference_declarator.base_declarator;
         } else if (current->type == NODE_ARRAY_DECLARATOR) {
             current = current->data.array_declarator.base_declarator;
         } else if (current->type == NODE_FUNCTION_DECLARATOR) {
@@ -193,6 +198,13 @@ Type* analyze_expression(ASTNode* node) {
                  return create_type(TYPE_UNKNOWN);
             }
             return sym->type;
+        }
+
+        case NODE_QUALIFIED_ID: {
+            // Compiler would look up the qualifiers
+            // to find the correct scope, then look for the identifier in that scope.
+            // For now, just analyzing the the final identifier.
+            return analyze_expression(node->data.qualified_id.identifier);
         }
 
         case NODE_BINARY_EXPR: {

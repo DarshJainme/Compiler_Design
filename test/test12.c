@@ -1,9 +1,9 @@
-int a=0,b=0;
-// b=a++;
-// b=++a;
-// b=a--;
-// b=--a;
+int aaaaaaaaaaaaaa=0,b=0;
+b=aaaaaaaaaaaaaa++;
+b=++aaaaaaaaaaaaaa;
+b=aaaaaaaaaaaaaa--;
+b=--aaaaaaaaaaaaaa;
+int t0=b;
 int t1=b;
-int t2=b;
-t1++;
-++t2;
+t0=t1++;
+t1=++t0;

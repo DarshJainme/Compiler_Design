@@ -233,6 +233,11 @@ ASTNode* create_function_declarator_node(ASTNode* base_declarator, ASTNodeList* 
     node->data.function_declarator.parameters = params;
     return node;
 }
+ASTNode* create_reference_declarator_node(ASTNode* base_declarator) {
+    ASTNode* node = create_node(NODE_REFERENCE_DECLARATOR);
+    node->data.reference_declarator.base_declarator = base_declarator;
+    return node;
+}
 ASTNode* create_struct_union_node(int kind, char* name, ASTNodeList* members){
     ASTNode* node = create_node(NODE_STRUCT_OR_UNION_SPECIFIER);
     node->data.struct_union_specifier.kind = kind;
@@ -283,6 +288,12 @@ ASTNode* create_delete_expr_node(ASTNode* expr){
     return node;
 }
 
+ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier) {
+    ASTNode* node = create_node(NODE_QUALIFIED_ID);
+    node->data.qualified_id.qualifiers = qualifiers;
+    node->data.qualified_id.identifier = identifier;
+    return node;
+}
 // --- AST Printing for Debugging ---
 
 void print_indent(int indent) {
@@ -325,6 +336,17 @@ void print_ast(ASTNode* node, int indent) {
             }
             break;
         case NODE_IDENTIFIER: printf("Identifier: %s\n", node->data.stringValue); break;
+        case NODE_QUALIFIED_ID:
+            printf("QualifiedID [line %d]\n", node->lineno);
+            print_indent(indent + 1);
+            printf("Scope:\n");
+            for (ASTNodeList* item = node->data.qualified_id.qualifiers; item; item = item->next) {
+                print_ast(item->node, indent + 2);
+            }
+            print_indent(indent + 1);
+            printf("Identifier:\n");
+            print_ast(node->data.qualified_id.identifier, indent + 2);
+            break;
         case NODE_CONSTANT: printf("Constant: %s\n", node->data.stringValue); break;
         case NODE_STRING_LITERAL: printf("String Literal: \"%s\"\n", node->data.stringValue); break;
         case NODE_TYPENAME: printf("Typename: %s\n", node->data.stringValue); break;
@@ -460,6 +482,11 @@ void print_ast(ASTNode* node, int indent) {
             for(ASTNodeList* p = node->data.function_declarator.parameters; p; p=p->next){
                 print_ast(p->node, indent + 4);
             }
+            break;
+        
+        case NODE_REFERENCE_DECLARATOR:
+            printf("Reference Declarator\n");
+            print_ast(node->data.reference_declarator.base_declarator, indent + 2);
             break;
 
         case NODE_PARAMETER_DECLARATION:
