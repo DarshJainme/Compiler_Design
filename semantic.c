@@ -129,6 +129,7 @@ void analyze_statement(ASTNode* node) {
             break;
         case NODE_IF_STATEMENT:
         case NODE_WHILE_STATEMENT:
+        case NODE_UNTIL_STATEMENT:
         case NODE_FOR_STATEMENT:
         case NODE_DO_WHILE_STATEMENT: {
             Type* cond_type = NULL;
@@ -139,6 +140,9 @@ void analyze_statement(ASTNode* node) {
             } else if (node->type == NODE_WHILE_STATEMENT) {
                 cond_type = analyze_expression(node->data.while_statement.condition);
                 analyze_statement(node->data.while_statement.body);
+            } else if (node->type == NODE_UNTIL_STATEMENT) {
+                cond_type = analyze_expression(node->data.until_statement.condition);
+                analyze_statement(node->data.until_statement.body);
             } else if (node->type == NODE_FOR_STATEMENT) {
                 if (node->data.for_statement.init) analyze_expression(node->data.for_statement.init);
                 if (node->data.for_statement.condition) cond_type = analyze_expression(node->data.for_statement.condition);

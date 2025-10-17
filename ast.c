@@ -144,6 +144,12 @@ ASTNode* create_while_statement_node(ASTNode* condition, ASTNode* body){
     node->data.while_statement.body = body;
     return node;
 }
+ASTNode* create_until_statement_node(ASTNode* condition, ASTNode* body){
+    ASTNode* node = create_node(NODE_UNTIL_STATEMENT);
+    node->data.until_statement.condition = condition;
+    node->data.until_statement.body = body;
+    return node;
+}
 ASTNode* create_do_while_statement_node(ASTNode* body, ASTNode* condition){
     ASTNode* node = create_node(NODE_DO_WHILE_STATEMENT);
     node->data.do_while_statement.body = body;
@@ -529,6 +535,14 @@ void print_ast(ASTNode* node, int indent) {
             print_ast(node->data.while_statement.condition, indent+4);
             print_indent(indent + 2); printf("Body:\n");
             print_ast(node->data.while_statement.body, indent+4);
+            break;
+
+        case NODE_UNTIL_STATEMENT:
+            printf("Until Statement [line %d]\n", node->lineno);
+            print_indent(indent + 2); printf("Condition:\n");
+            print_ast(node->data.until_statement.condition, indent+4);
+            print_indent(indent + 2); printf("Body:\n");
+            print_ast(node->data.until_statement.body, indent+4);
             break;
 
         case NODE_DO_WHILE_STATEMENT:

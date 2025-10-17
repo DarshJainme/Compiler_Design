@@ -363,6 +363,8 @@ selection_statement
 
 iteration_statement
     : WHILE '(' expression ')' statement { $$ = create_while_statement_node($3, $5); }
+    // add until keyword
+    | UNTIL '(' expression ')' statement { $$ = create_until_statement_node($3, $5); }
     | DO statement WHILE '(' expression ')' ';' { $$ = create_do_while_statement_node($2, $5); }
     | FOR '(' expression_statement expression_statement ')' statement { $$ = create_for_statement_node($3, $4, NULL, $6); }
     | FOR '(' expression_statement expression_statement expression ')' statement { $$ = create_for_statement_node($3, $4, $5, $7); }

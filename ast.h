@@ -32,6 +32,7 @@ typedef enum {
     NODE_CASE_STATEMENT,
     NODE_DEFAULT_STATEMENT,
     NODE_WHILE_STATEMENT,
+    NODE_UNTIL_STATEMENT,
     NODE_DO_WHILE_STATEMENT,
     NODE_FOR_STATEMENT,
     NODE_GOTO_STATEMENT,
@@ -187,6 +188,11 @@ typedef struct ASTNode {
         } while_statement;
 
         struct {
+            struct ASTNode* condition;
+            struct ASTNode* body;
+        } until_statement;
+
+        struct {
             struct ASTNode* body;
             struct ASTNode* condition;
         } do_while_statement;
@@ -318,6 +324,7 @@ ASTNode* create_switch_statement_node(ASTNode* expression, ASTNode* body);
 ASTNode* create_case_statement_node(ASTNode* expression, ASTNode* body);
 ASTNode* create_default_statement_node(ASTNode* body);
 ASTNode* create_while_statement_node(ASTNode* condition, ASTNode* body);
+ASTNode* create_until_statement_node(ASTNode* condition, ASTNode* body);
 ASTNode* create_do_while_statement_node(ASTNode* body, ASTNode* condition);
 ASTNode* create_goto_statement_node(char* label);
 ASTNode* create_return_statement_node(ASTNode* expression);
