@@ -105,10 +105,16 @@ void print_tac() {
                 case TAC_SUB: print_addr(instr->arg1); printf(" - "); print_addr(instr->arg2); break;
                 case TAC_MUL: print_addr(instr->arg1); printf(" * "); print_addr(instr->arg2); break;
                 case TAC_DIV: print_addr(instr->arg1); printf(" / "); print_addr(instr->arg2); break;
+                case TAC_EQ: print_addr(instr->arg1); printf(" == "); print_addr(instr->arg2); break;
+                case TAC_NE: print_addr(instr->arg1); printf(" != "); print_addr(instr->arg2); break;
+                case TAC_LT: print_addr(instr->arg1); printf(" < "); print_addr(instr->arg2); break;
+                case TAC_LE: print_addr(instr->arg1); printf(" <= "); print_addr(instr->arg2); break;
+                case TAC_GT: print_addr(instr->arg1); printf(" > "); print_addr(instr->arg2); break;
+                case TAC_GE: print_addr(instr->arg1); printf(" >= "); print_addr(instr->arg2); break;
                 case TAC_GOTO: printf("goto "); print_addr(instr->res); break;
                 case TAC_IFZ: printf("ifz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
                 case TAC_RETURN: printf("return "); print_addr(instr->arg1); break;
-                // Add more cases here as you implement them
+                // We will be adding more cases here as we implement them
                 default: printf("UNKNOWN_OP %d",instr->op); break;
             }
         }
@@ -235,6 +241,22 @@ void gen_tac_for_node(ASTNode* node) {
             }
             break;
 
+        case NODE_DECLARATION: {
+            // Handle declarations
+            if (!node->data.declaration.declarators) break;
+
+            for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
+                ASTNode* init_decl = d_item->node;
+                if (init_decl->data.init_declarator.initializer) {
+                    // This is a declaration with an initializer, e.g., int x = 5;
+                    // We generate TAC for the assignment part.
+                    TacAddr* lvalue = gen_tac_for_expr(init_decl->data.init_declarator.declarator);
+                    TacAddr* rvalue = gen_tac_for_expr(init_decl->data.init_declarator.initializer);
+                    emit(TAC_ASSIGN, lvalue, rvalue, NULL);
+                }
+            }
+            break;
+        }
         case NODE_FUNCTION_DEFINITION:
             emit(TAC_BEGIN_FUNC, NULL, NULL, NULL);
             // In a real implementation, you'd handle parameters here
