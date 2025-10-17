@@ -13,6 +13,7 @@ extern int semantic_errors;
 void analyze_node(ASTNode *node, FunctionAnalysisContext* context);
 Type *analyze_expression(ASTNode *node);
 void analyze_declaration(ASTNode *node);
+void analyze_class_specifier(ASTNode *node);
 void collect_labels(ASTNode* node, FunctionAnalysisContext* context);
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
 
@@ -471,10 +472,103 @@ void analyze_struct_or_union_specifier(ASTNode *node, Type* type_being_built) {
     const char* tag_name = node->data.struct_or_union_specifier.name;
     if (tag_name) {
         // We must add the type to the outer scope, not the member scope we just left.
-        add_symbol(tag_name, type_being_built, SYM_TYPEDEF);
+        if (!find_symbol_in_current_scope(tag_name)) { // Check before adding
+            add_symbol(tag_name, type_being_built, SYM_TYPEDEF);
+        }
     }
 }
 
+void analyze_class_specifier(ASTNode *node) {
+    if (!node || node->type != NODE_CLASS_SPECIFIER) return;
+
+    const char* class_name = node->data.class_specifier.name;
+    if (!class_name) return;
+
+    Type* class_type = NULL;
+    Symbol* existing_symbol = find_symbol(class_name);
+
+    if (existing_symbol && existing_symbol->kind == SYM_TYPEDEF && (existing_symbol->type->kind == TYPE_STRUCT || existing_symbol->type->kind == TYPE_UNION)) {
+        if (existing_symbol->type->data.struct_union_info.members == NULL && node->data.class_specifier.members) {
+            class_type = existing_symbol->type;
+        } else {
+            fprintf(stderr, "Semantic Error (Line %d): Redefinition of class '%s'.\n", node->lineno, class_name);
+            semantic_errors++;
+            return;
+        }
+    }
+
+    if (!class_type) {
+        class_type = create_type(TYPE_STRUCT);
+        class_type->data.struct_union_info.name = strdup(class_name);
+        add_symbol(class_name, class_type, SYM_TYPEDEF);
+        add_typename(class_name);
+    }
+
+    Member* head = NULL, *tail = NULL;
+
+    // --- START: INHERITANCE HANDLING ---
+    ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
+    for (ASTNodeList* base_item = base_clauses; base_item; base_item = base_item->next) {
+        ASTNode* base_specifier_node = base_item->node;
+        if (base_specifier_node->type != NODE_BASE_SPECIFIER) continue;
+
+        const char* base_class_name = base_specifier_node->data.base_specifier.class_name->data.type_name.name;
+        Symbol* base_symbol = find_symbol(base_class_name);
+
+        if (!base_symbol || base_symbol->type->kind != TYPE_STRUCT) {
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is not a class or struct.\n", node->lineno, base_class_name);
+            semantic_errors++;
+            continue;
+        }
+
+        Type* base_type = base_symbol->type;
+        if (!base_type->data.struct_union_info.members) {
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is an incomplete type.\n", node->lineno, base_class_name);
+            semantic_errors++;
+            continue;
+        }
+
+        // Copy members from base class
+        for (Member* base_member = base_type->data.struct_union_info.members; base_member; base_member = base_member->next) {
+            Member* new_member = (Member*)calloc(1, sizeof(Member));
+            new_member->name = strdup(base_member->name);
+            new_member->type = copy_type(base_member->type);
+            
+            if (!head) {
+                head = tail = new_member;
+            } else {
+                tail->next = new_member;
+                tail = new_member;
+            }
+        }
+    }
+    // --- END: INHERITANCE HANDLING ---
+
+    enter_scope();
+    ASTNodeList* members = node->data.class_specifier.members;
+    for (ASTNodeList* member_item = members; member_item; member_item = member_item->next) {
+        analyze_node(member_item->node, NULL);
+    }
+
+    Scope* member_scope = get_current_scope();
+    for (int i = 0; i < member_scope->symbol_count; i++) {
+        Symbol* member_symbol = member_scope->symbols[i];
+        
+        Member* new_member = (Member*)calloc(1, sizeof(Member));
+        new_member->name = strdup(member_symbol->name);
+        new_member->type = copy_type(member_symbol->type);
+        
+        if (!head) {
+            head = tail = new_member;
+        } else {
+            tail->next = new_member;
+            tail = new_member;
+        }
+    }
+    leave_scope();
+
+    class_type->data.struct_union_info.members = head;
+}
 
 // Add all function parameters to the current scope
 void add_function_parameters(ASTNode *declarator)
@@ -1019,10 +1113,26 @@ void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass 
         }
         break;
     case NODE_DECLARATION:
-        analyze_declaration(node);
+        if (node->data.declaration.specifiers && node->data.declaration.specifiers->node->type == NODE_CLASS_SPECIFIER) {
+            analyze_class_specifier(node->data.declaration.specifiers->node);
+        } else {
+            analyze_declaration(node);
+        }
         break;
     case NODE_FUNCTION_DEFINITION:
         analyze_function_definition(node);
+        break;
+    case NODE_CLASS_SPECIFIER: // Handle forward declarations like "class Animal;"
+        if (node->data.class_specifier.name && !node->data.class_specifier.members) {
+             if (!find_symbol(node->data.class_specifier.name)) {
+                // It's a forward declaration. Create an incomplete type.
+                Type* incomplete_type = create_type(TYPE_STRUCT);
+                incomplete_type->data.struct_union_info.name = strdup(node->data.class_specifier.name);
+                incomplete_type->data.struct_union_info.members = NULL; // Mark as incomplete
+                add_symbol(node->data.class_specifier.name, incomplete_type, SYM_TYPEDEF);
+                add_typename(node->data.class_specifier.name);
+            }
+        }
         break;
     default:
         // If it's a statement, analyze it as such.

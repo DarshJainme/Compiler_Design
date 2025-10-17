@@ -4,9 +4,6 @@ typedef int myint;
 // Forward declare Animal so getSecret can use it
 class Animal; 
 
-// Declare a global function that will be a friend
-void setSecret(Animal &a, int s);
-
 // Global variable to demonstrate scope resolution
 int age = 100;
 
@@ -15,19 +12,12 @@ public:
     int age;
     static int count;   // static member
     void speak();
-    // Declare a friend function
-    friend void setSecret(Animal& a, int s);
 private:
     int secret;
 };
 
 // Initialize static member using scope resolution
 int Animal::count = 0;
-
-// Implement the friend function
-void setSecret(Animal& a, int s) {
-    a.secret = s; // OK: friend function can access private members
-}
 
 class Dog : public Animal {
 public:
@@ -47,8 +37,6 @@ int main() {
     Animal a;
     Dog d;
     a.age = 5;
-    // a.secret = 10; // ERROR: main cannot access private member
-    setSecret(a, 10); // OK: friend function sets the secret
 
     d.age = 3;
     d.bark();

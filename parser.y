@@ -677,9 +677,9 @@ int main(int argc, char **argv) {
             printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
             if (root) print_ast(root, 0);
             
-            printf("\n--- Generating Three-Address Code ---\n");
-            generate_tac(root);
-            print_tac();
+            // printf("\n--- Generating Three-Address Code ---\n");
+            // generate_tac(root);
+            // print_tac();
             // print_symbol_table(current_scope, 0);
 
         } else {
