@@ -299,6 +299,47 @@ void gen_tac_for_node(ASTNode* node) {
             break;
         }
 
+        case NODE_WHILE_STATEMENT: {
+            TacAddr* start_label = new_label_addr();
+            TacAddr* end_label = new_label_addr();
+
+            emit(TAC_LABEL, start_label, NULL, NULL); // Label for loop start
+
+            // Condition
+            TacAddr* cond = gen_tac_for_expr(node->data.while_statement.condition);
+            emit(TAC_IFZ, end_label, cond, NULL); // If condition is false, jump to end
+
+            // Body
+            gen_tac_for_node(node->data.while_statement.body);
+            emit(TAC_GOTO, start_label, NULL, NULL); // Jump back to the start
+
+            // End label
+            emit(TAC_LABEL, end_label, NULL, NULL);
+            break;
+        }
+
+        case NODE_UNTIL_STATEMENT: {
+            TacAddr* start_label = new_label_addr();
+            TacAddr* end_label = new_label_addr();
+
+            emit(TAC_LABEL, start_label, NULL, NULL); // Label for loop start
+
+            // Condition
+            TacAddr* cond = gen_tac_for_expr(node->data.until_statement.condition);
+            // Create a temporary to hold the inverted condition
+            TacAddr* temp_not_cond = new_temp();
+            emit(TAC_EQ, temp_not_cond, cond, new_const(0)); // temp = (cond == 0)
+            emit(TAC_IFZ, end_label, temp_not_cond, NULL); // If temp is false (i.e., cond was true), jump to end
+
+            // Body
+            gen_tac_for_node(node->data.until_statement.body);
+            emit(TAC_GOTO, start_label, NULL, NULL); // Jump back to the start
+
+            // End label
+            emit(TAC_LABEL, end_label, NULL, NULL);
+            break;
+        }
+
         case NODE_RETURN_STATEMENT: {
             TacAddr* retval = NULL;
             if (node->data.return_statement.expression) {
