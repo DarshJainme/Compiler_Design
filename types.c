@@ -109,7 +109,7 @@ char* type_to_string(Type* type) {
 // In semantic.c
 
 Type* get_type_from_specifiers(ASTNodeList* specifiers) {
-    if (!specifiers) return create_type(TYPE_INT);
+    if (!specifiers) return create_type(TYPE_INT); // Default to int if no specifiers
 
     Type* type = create_type(TYPE_UNKNOWN);
     int type_specified = 0;
@@ -121,25 +121,21 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
         ASTNode *spec_node = s->node;
         if (spec_node->type == NODE_SPECIFIER) {
             switch (spec_node->data.specifier) {
-                case VOID:   type->kind = TYPE_VOID;   type_specified = 1; break;
-                case BOOL:   type->kind = TYPE_BOOL;   type_specified = 1; break;
-                case CHAR:   type->kind = TYPE_CHAR;   type_specified = 1; break;
-                case STRING: type->kind = TYPE_STRING; type_specified = 1; break;
-                case SHORT:  type->kind = TYPE_SHORT;  type_specified = 1; break;
-                case INT:    type->kind = TYPE_INT;    type_specified = 1; break;
-                case LONG:   type->kind = TYPE_LONG;   type_specified = 1; break;
-                case FLOAT:  type->kind = TYPE_FLOAT;  type_specified = 1; break;
-                case DOUBLE: type->kind = TYPE_DOUBLE; type_specified = 1; break;
+                case VOID:   if (!type_specified) type->kind = TYPE_VOID;   type_specified = 1; break;
+                case BOOL:   if (!type_specified) type->kind = TYPE_BOOL;   type_specified = 1; break;
+                case CHAR:   if (!type_specified) type->kind = TYPE_CHAR;   type_specified = 1; break;
+                case STRING: if (!type_specified) type->kind = TYPE_STRING; type_specified = 1; break;
+                case SHORT:  if (!type_specified) type->kind = TYPE_SHORT;  type_specified = 1; break;
+                case INT:    if (!type_specified) type->kind = TYPE_INT;    type_specified = 1; break;
+                case LONG:   if (!type_specified) type->kind = TYPE_LONG;   type_specified = 1; break;
+                case FLOAT:  if (!type_specified) type->kind = TYPE_FLOAT;  type_specified = 1; break;
+                case DOUBLE: if (!type_specified) type->kind = TYPE_DOUBLE; type_specified = 1; break;
                 default: break;
             }
         } else if (spec_node->type == NODE_TYPENAME) {
             user_defined_typename = spec_node->data.stringValue;
             type_specified = 1;
-        } else if (spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
-            struct_union_spec_node = spec_node;
-            type_specified = 1;
-        } else if (spec_node->type == NODE_ENUM_SPECIFIER) {
-            // Enums are handled similarly to structs
+        } else if (spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER || spec_node->type == NODE_ENUM_SPECIFIER) {
             struct_union_spec_node = spec_node;
             type_specified = 1;
         }
@@ -158,7 +154,10 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
         Symbol* sym = find_symbol(user_defined_typename);
         if (sym && sym->kind == SYM_TYPEDEF) {
             free(type); // Free the temp type
-            return copy_type(sym->type); // Return a copy of the complete type from the symbol table
+            Type* found_type = copy_type(sym->type);
+            found_type->is_const = type->is_const; // Apply qualifiers from this declaration
+            found_type->is_unsigned = type->is_unsigned;
+            return found_type;
         } else {
             fprintf(stderr, "Semantic Error: Unknown type name '%s'.\n", user_defined_typename);
             semantic_errors++;
@@ -166,38 +165,51 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
             return type;
         }
     } else if (struct_union_spec_node) {
-        if(struct_union_spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
+        if (struct_union_spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
             const char* tag_name = struct_union_spec_node->data.struct_or_union_specifier.name;
+            ASTNodeList* members = struct_union_spec_node->data.struct_or_union_specifier.members;
             
-            // This is a USAGE, e.g., "struct MyStruct s;"
-            if (tag_name && !struct_union_spec_node->data.struct_or_union_specifier.members) {
-                Symbol* sym = find_symbol(tag_name);
-                if (sym && sym->kind == SYM_TYPEDEF) {
-                    free(type);
-                    return copy_type(sym->type);
-                } else {
-                    fprintf(stderr, "Semantic Error: Incomplete type '%s'.\n", tag_name);
-                    semantic_errors++;
-                    type->kind = TYPE_UNKNOWN;
-                    return type;
-                }
-            }
-            // This is a DEFINITION, e.g., "struct MyStruct { ... }"
-            else {
+            // Case 1: Definition (e.g., "struct T { ... }") or Anonymous Definition (e.g., "struct { ... }")
+            if (members) {
                 type->kind = (struct_union_spec_node->data.struct_or_union_specifier.kind == STRUCT) ? TYPE_STRUCT : TYPE_UNION;
+                
+                // If it has a name, it defines a new type in the symbol table.
+                if (tag_name) {
+                    // Check for redefinition in the current scope.
+                    if (find_symbol_in_current_scope(tag_name)) {
+                        fprintf(stderr, "Semantic Error: Redefinition of 'struct %s'.\n", tag_name);
+                        semantic_errors++;
+                    }
+                    // Add the symbol *before* analyzing members to support recursive structures.
+                    // We use SYM_TYPEDEF as a stand-in for a type tag.
+                    add_symbol(tag_name, type, SYM_TYPEDEF);
+                }
+                
+                // Now, analyze the members to populate the type information.
                 analyze_struct_or_union_specifier(struct_union_spec_node, type);
                 return type;
             }
-        } else if (struct_union_spec_node->type == NODE_ENUM_SPECIFIER) {
-            // This logic is similar for enums
-            const char* tag_name = struct_union_spec_node->data.enum_specifier.name;
-            if(tag_name && !struct_union_spec_node->data.enum_specifier.members) {
-                 Symbol* sym = find_symbol(tag_name);
-                 if (sym && sym->kind == SYM_TYPEDEF) {
-                    free(type);
-                    return copy_type(sym->type);
+            // Case 2: Usage (e.g., "struct T s;") or Forward Declaration (e.g., "struct T;")
+            else if (tag_name) {
+                Symbol* sym = find_symbol(tag_name);
+                if (sym && sym->kind == SYM_TYPEDEF && (sym->type->kind == TYPE_STRUCT || sym->type->kind == TYPE_UNION)) {
+                    free(type); // Free the temporary type.
+                    Type* found_type = copy_type(sym->type); // Use the complete type from the symbol table.
+                    found_type->is_const = type->is_const; // Apply qualifiers from this declaration
+                    return found_type;
+                } else {
+                    // This could be a forward declaration. Create an incomplete type and add it to the table.
+                    fprintf(stderr, "Semantic Warning: Using incomplete type 'struct %s'. Assuming forward declaration.\n", tag_name);
+                    type->kind = (struct_union_spec_node->data.struct_or_union_specifier.kind == STRUCT) ? TYPE_STRUCT : TYPE_UNION;
+                    type->data.struct_union_info.name = strdup(tag_name);
+                    type->data.struct_union_info.members = NULL; // Mark as incomplete
+                    if (!find_symbol_in_current_scope(tag_name)) {
+                        add_symbol(tag_name, type, SYM_TYPEDEF);
+                    }
+                    return type;
                 }
             }
+        } else if (struct_union_spec_node->type == NODE_ENUM_SPECIFIER) {
             type->kind = TYPE_ENUM;
             analyze_enum_specifier(struct_union_spec_node);
             return type;
@@ -218,7 +230,7 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
     ASTNode* current = declarator;
     
     // This loop peels layers off the declarator, building the type from the inside out.
-    while (current->type != NODE_IDENTIFIER) {
+    while (current && current->type != NODE_IDENTIFIER) {
         switch (current->type) {
             case NODE_POINTER_DECLARATOR:
                 final_type = create_pointer_type(final_type);
@@ -228,8 +240,17 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
                 final_type = create_array_type(final_type, 0); // Size not handled yet
                 current = current->data.array_declarator.base_declarator;
                 break;
-            default: // Function declarators, etc.
-                return final_type; // Stop for now
+            case NODE_FUNCTION_DECLARATOR: {
+                Type* func_type = create_type(TYPE_FUNCTION);
+                func_type->data.function_sig.return_type = final_type; // The type built so far is the return type
+                func_type->data.function_sig.params = current->data.function_declarator.parameters;
+                final_type = func_type;
+                current = current->data.function_declarator.base_declarator;
+                break;
+            }
+            default: 
+                current = NULL; // Stop for other node types
+                break;
         }
     }
     return final_type;

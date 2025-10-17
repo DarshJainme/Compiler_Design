@@ -7,7 +7,7 @@
 #include "st.h"
 
 extern int semantic_errors;
-static Type *current_function_return_type = NULL;
+// static Type *current_function_return_type = NULL;
 
 // Forward Declarations for Traversal
 void analyze_node(ASTNode *node, FunctionAnalysisContext* context);
@@ -104,25 +104,32 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
         }
         case NODE_WHILE_STATEMENT:
         case NODE_DO_WHILE_STATEMENT: {
-            Type *cond_type = analyze_expression(node->data.while_statement.condition);
+            bool was_in_loop = context->in_loop; // Save previous state
+            context->in_loop = true;
+
+            Type *cond_type = NULL;
             if (node->type == NODE_WHILE_STATEMENT)
             {
                 cond_type = analyze_expression(node->data.while_statement.condition);
                 analyze_statement_with_context(node->data.while_statement.body, context);
             }
-            else if (node->type == NODE_DO_WHILE_STATEMENT)
+            else // NODE_DO_WHILE_STATEMENT
             {
                 analyze_statement_with_context(node->data.do_while_statement.body, context);
                 cond_type = analyze_expression(node->data.do_while_statement.condition);
             }
+
             if (cond_type && !is_scalar_type(cond_type))
             {
                 fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
                 semantic_errors++;
             }
+
+            context->in_loop = was_in_loop; // Restore previous state
             break;
         }
         case NODE_FOR_STATEMENT: {
+            bool was_in_loop = context->in_loop;
             context->in_loop = true;
             enter_scope(); // Scope for the loop variable and body
             // 1. Analyze the INIT part
@@ -170,7 +177,7 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
             // 4. Analyze the BODY
             analyze_statement_with_context(node->data.for_statement.body, context); // Use the context-aware version
             leave_scope();
-            context->in_loop = false;
+            context->in_loop = was_in_loop;
             break;
         }
 
@@ -235,7 +242,7 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
             }
             break;
         case NODE_RETURN_STATEMENT: {
-            if (!current_function_return_type)
+            if (!context || !context->return_type)
             {
                 fprintf(stderr, "Semantic Error (Line %d): return statement not in a function.\n", node->lineno);
                 semantic_errors++;
@@ -243,16 +250,16 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
             else
             {
                 Type *return_expr_type = node->data.return_statement.expression ? analyze_expression(node->data.return_statement.expression) : create_type(TYPE_VOID);
-                if (!are_types_compatible(current_function_return_type, return_expr_type))
+                if (!are_types_compatible(context->return_type, return_expr_type))
                 {
-                    fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(current_function_return_type), type_to_string(return_expr_type));
+                    fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(context->return_type), type_to_string(return_expr_type));
                     semantic_errors++;
                 }
-                else if (current_function_return_type->kind != return_expr_type->kind)
+                else if (context->return_type->kind != return_expr_type->kind)
                 {
                     // Insert cast node for implicit conversion
                     node->data.return_statement.expression = create_cast_expr_node(
-                        create_typename_node(type_to_string(current_function_return_type)),
+                        create_typename_node(type_to_string(context->return_type)),
                         node->data.return_statement.expression);
                 }
             }
@@ -523,7 +530,10 @@ void analyze_declaration(ASTNode *node)
             break;
         }
     }
-
+    if (!node->data.declaration.declarators) {
+        free(base_type); // The type is processed, we can free the temporary one.
+        return;
+    }
     if (node->data.declaration.declarators)
     {
         for (ASTNodeList *d = node->data.declaration.declarators; d; d = d->next)

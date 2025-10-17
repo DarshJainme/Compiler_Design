@@ -513,7 +513,34 @@ void print_ast(ASTNode* node, int indent) {
             print_indent(indent + 2); printf("Condition:\n");
             print_ast(node->data.do_while_statement.condition, indent+4);
             break;
+        case NODE_SWITCH_STATEMENT:
+            printf("Switch Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Expression:\n");
+            print_ast(node->data.switch_statement.expression, indent + 2);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.switch_statement.body, indent + 2);
+            break;
+        case NODE_CASE_STATEMENT:
+            printf("Case Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Value:\n");
+            print_ast(node->data.case_statement.expression, indent + 2);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.case_statement.body, indent + 2);
+            break;
+        case NODE_DEFAULT_STATEMENT:
+            printf("Default Statement [line %d]\n", node->lineno);
+            print_indent(indent + 1); printf("Body:\n");
+            print_ast(node->data.default_statement.body, indent + 2);
+            break;
 
+        case NODE_LABELED_STATEMENT:
+            printf("Labeled Statement (label: %s) [line %d]\n", node->data.labeled_statement.label, node->lineno);
+            print_ast(node->data.labeled_statement.statement, indent + 1);
+            break;
+
+        case NODE_GOTO_STATEMENT:
+            printf("Goto Statement (label: %s) [line %d]\n", node->data.goto_statement.label, node->lineno);
+            break;
         case NODE_BREAK_STATEMENT: printf("Break Statement\n"); break;
         case NODE_CONTINUE_STATEMENT: printf("Continue Statement\n"); break;
         

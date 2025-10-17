@@ -76,8 +76,8 @@ void test_until_loop() {
 void test_multilevel_pointers() {
     int a = 10;
     int *p = &a;
-    // int **pp = &p;
-    // int ***ppp = &pp;  // Triple pointer
+    int **pp = &p;
+    int ***ppp = &pp;  // Triple pointer
 }
 
 // Multi-Dimensional Arrays

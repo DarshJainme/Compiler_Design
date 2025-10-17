@@ -81,7 +81,7 @@ int is_typename(const char* name) {
 
 %type <node> declaration function_definition
 %type <list> declaration_specifiers init_declarator_list
-%type <node> init_declarator declarator direct_declarator pointer
+%type <node> init_declarator declarator direct_declarator ptr_operator
 %type <node> storage_class_specifier type_specifier type_qualifier
 %type <node> struct_or_union_specifier enum_specifier
 %type <list> struct_declaration_list enumerator_list type_qualifier_list
@@ -457,8 +457,8 @@ struct_declarator_list
     ;
 
 struct_declarator
-    // : declarator { $$ = create_init_declarator_node($1, NULL); }
-    : declarator { $$ = $1; }
+    : declarator { $$ = create_init_declarator_node($1, NULL); }
+    // : declarator { $$ = $1; }
     | declarator ':' constant_expression { /* Bitfield support, can ignore for now */ $$ = $1; }
     ;
 
@@ -519,7 +519,7 @@ class_member
 
 /* --- Declarators --- */
 declarator
-    : pointer direct_declarator { $$ = create_pointer_declarator_node($1, $2); }
+    : ptr_operator declarator { $$ = create_pointer_declarator_node($1, $2); }
     // | '&' direct_declarator     { $$ = create_pointer_declarator_node(create_specifier_node('&'), $2); } /* C++ Reference handled separately */
     | direct_declarator
     ;
@@ -533,11 +533,10 @@ direct_declarator
     | direct_declarator '(' ')'                 { $$ = create_function_declarator_node($1, NULL); }
     ;
 
-pointer
+ptr_operator
     : '*' type_qualifier_list_opt
         { $$ = create_pointer_node($2, NULL); }
-    | pointer '*' type_qualifier_list_opt
-        { $$ = create_pointer_node($3, $1); } // Note the change in order for left recursion
+    | '&' type_qualifier_list_opt { $$ = create_specifier_node('&'); }
     ;
 
 type_qualifier_list_opt
@@ -579,8 +578,8 @@ type_name
     ;
 
 abstract_declarator
-    : pointer
-    | pointer direct_abstract_declarator { $$ = create_pointer_declarator_node($1, $2); }
+    : ptr_operator
+    | ptr_operator direct_abstract_declarator { $$ = create_pointer_declarator_node($1, $2); }
     | direct_abstract_declarator
     ;
 
