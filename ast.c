@@ -333,6 +333,11 @@ const char* token_to_string(int token) {
         case TYPEDEF: return "TYPEDEF"; case STRUCT: return "STRUCT"; case UNION: return "UNION"; case CLASS: return "CLASS";
         case PUBLIC: return "PUBLIC"; case PRIVATE: return "PRIVATE"; case PROTECTED: return "PROTECTED";
         case STRING: return "STRING";
+        case AUTO: return "AUTO"; case BREAK: return "BREAK"; case CASE: return "CASE"; case CONTINUE: return "CONTINUE";
+        case DEFAULT: return "DEFAULT"; case DO: return "DO"; case ELSE: return "ELSE"; case FOR: return "FOR";
+        case GOTO: return "GOTO"; case IF: return "IF"; case RETURN: return "RETURN"; case SWITCH: return "SWITCH";
+        case WHILE: return "WHILE"; case IDENTIFIER: return "IDENTIFIER";
+        case STRING_LITERAL: return "STRING_LITERAL";
         default: return "UNKNOWN_TOKEN";
     }
 }
@@ -652,7 +657,17 @@ void print_ast(ASTNode* node, int indent) {
                 print_ast(item->node, indent + 1);
             }
             break;
-
+        case NODE_LAMBDA_EXPR:
+            printf("Lambda Expression [line %d]\n", node->lineno);
+            print_indent(indent+1);
+            printf("Parameters:\n");
+            for(ASTNodeList* p = node->data.lambda_expr.params; p; p=p->next){
+                print_ast(p->node, indent+2);
+            }
+            print_indent(indent+1);
+            printf("Body:\n");
+            print_ast(node->data.lambda_expr.body, indent+2);
+            break;
         case NODE_ENUM_SPECIFIER:
             printf("Enum Specifier: %s [line %d]\n", node->data.enum_specifier.name ? node->data.enum_specifier.name : "(anonymous)", node->lineno);
             for (ASTNodeList* item = node->data.enum_specifier.members; item; item = item->next) {

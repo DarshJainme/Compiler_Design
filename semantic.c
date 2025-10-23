@@ -13,10 +13,79 @@ extern int semantic_errors;
 void analyze_node(ASTNode *node, FunctionAnalysisContext* context);
 Type *analyze_expression(ASTNode *node);
 void analyze_declaration(ASTNode *node);
+void analyze_struct_or_union_specifier(ASTNode *node);
 void analyze_class_specifier(ASTNode *node);
-void collect_labels(ASTNode* node, FunctionAnalysisContext* context);
+void analyze_function_definition(ASTNode *node);
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
+char* get_name_from_declarator(ASTNode* declarator);
 
+void analyze_enum_specifier(ASTNode *node) {
+    if (!node || node->type != NODE_ENUM_SPECIFIER) return;
+
+    const char *tag_name = node->data.enumerator.name;
+    Type *enum_type = create_enum_type(tag_name);
+    
+    Symbol* existing_symbol = tag_name ? find_symbol_in_current_scope(tag_name) : NULL;
+    if(tag_name && existing_symbol) {
+        // This is a use of the enum, not a definition.
+        // Or it's a redefinition, which add_symbol will catch IF it has members.
+        if (node->data.enum_specifier.members && existing_symbol->type->data.struct_union_info.members) {
+             fprintf(stderr, "Semantic Error (Line %d): Redefinition of 'enum %s'.\n", node->lineno, tag_name);
+             semantic_errors++;
+             return;
+        }
+        if (!node->data.enum_specifier.members) {
+            // It's just `enum Color c;`. The existing type is fine.
+            return;
+        }
+    }
+    
+    if(tag_name) {
+        add_symbol(tag_name, enum_type, SYM_TYPEDEF, node->lineno);
+        add_typename(tag_name); // Also add to parser's typename list
+    }
+
+    ASTNodeList *enumerators = node->data.enum_specifier.members;
+    int val = 0;
+    for(ASTNodeList *e = enumerators; e; e = e->next) {
+        ASTNode *enum_node = e->node;
+        const char *ename = enum_node->data.enumerator.name;
+        int assigned_val = val;
+        if (enum_node->data.enumerator.value) {
+            assigned_val = atoi(enum_node->data.enumerator.value->data.stringValue);
+        }
+        Type *int_type = create_type(TYPE_INT);
+        Symbol *sym = add_symbol(ename, int_type, SYM_ENUM_CONST, enum_node->lineno);
+        if (sym) sym->type = int_type;
+        val = assigned_val + 1;
+    }
+}
+char* get_name_from_declarator(ASTNode* declarator) {
+    ASTNode* current = declarator;
+    while (current) {
+        switch (current->type) {
+            case NODE_IDENTIFIER:
+                return current->data.stringValue;
+            case NODE_QUALIFIED_ID:
+                return get_name_from_declarator(current->data.qualified_id.identifier);
+            case NODE_POINTER_DECLARATOR:
+                current = current->data.pointer_declarator.base_declarator;
+                break;
+            case NODE_ARRAY_DECLARATOR:
+                current = current->data.array_declarator.base_declarator;
+                break;
+            case NODE_FUNCTION_DECLARATOR:
+                current = current->data.function_declarator.base_declarator;
+                break;
+            case NODE_REFERENCE_DECLARATOR:
+                current = current->data.reference_declarator.base_declarator;
+                break;
+            default:
+                return NULL;
+        }
+    }
+    return NULL;
+}
 // --- First Pass: Label Collection ---
 void collect_labels(ASTNode* node, FunctionAnalysisContext* context) {
     if (!node) return;
@@ -281,40 +350,40 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
 
 
 // Helper function to extract the name from a declarator
-const char *get_name_from_declarator(ASTNode *declarator)
-{
-    ASTNode *current = declarator;
-    while (current)
-    {
-        if (current->type == NODE_IDENTIFIER)
-        {
-            return current->data.stringValue;
-        } else if (current->type == NODE_QUALIFIED_ID) 
-        {
-            // For a qualified ID, the "name" is the final identifier in the chain.
-            return get_name_from_declarator(current->data.qualified_id.identifier);
-        }
-        else if (current->type == NODE_POINTER_DECLARATOR)
-        {
-            current = current->data.pointer_declarator.base_declarator;
-        } else if (current->type == NODE_REFERENCE_DECLARATOR) {
-            current = current->data.reference_declarator.base_declarator;
-        }
-        else if (current->type == NODE_ARRAY_DECLARATOR)
-        {
-            current = current->data.array_declarator.base_declarator;
-        }
-        else if (current->type == NODE_FUNCTION_DECLARATOR)
-        {
-            current = current->data.function_declarator.base_declarator;
-        }
-        else
-        {
-            return NULL; // Should not happen for valid declarators
-        }
-    }
-    return NULL;
-}
+// const char *get_name_from_declarator(ASTNode *declarator)
+// {
+//     ASTNode *current = declarator;
+//     while (current)
+//     {
+//         if (current->type == NODE_IDENTIFIER)
+//         {
+//             return current->data.stringValue;
+//         } else if (current->type == NODE_QUALIFIED_ID) 
+//         {
+//             // For a qualified ID, the "name" is the final identifier in the chain.
+//             return get_name_from_declarator(current->data.qualified_id.identifier);
+//         }
+//         else if (current->type == NODE_POINTER_DECLARATOR)
+//         {
+//             current = current->data.pointer_declarator.base_declarator;
+//         } else if (current->type == NODE_REFERENCE_DECLARATOR) {
+//             current = current->data.reference_declarator.base_declarator;
+//         }
+//         else if (current->type == NODE_ARRAY_DECLARATOR)
+//         {
+//             current = current->data.array_declarator.base_declarator;
+//         }
+//         else if (current->type == NODE_FUNCTION_DECLARATOR)
+//         {
+//             current = current->data.function_declarator.base_declarator;
+//         }
+//         else
+//         {
+//             return NULL; // Should not happen for valid declarators
+//         }
+//     }
+//     return NULL;
+// }
 
 // Helper to infer type from constant string
 Type *infer_constant_type(const char *val)
@@ -375,15 +444,15 @@ int check_array_initializer(Type *array_type, ASTNode *initializer)
         ASTNodeList *elems = initializer->data.items_list;
         for (ASTNodeList *e = elems; e; e = e->next)
         {
-            if (array_type->data.base->kind == TYPE_ARRAY)
+            if (array_type->data.base_info.base->kind == TYPE_ARRAY)
             {
-                if (!check_array_initializer(array_type->data.base, e->node))
+                if (!check_array_initializer(array_type->data.base_info.base, e->node))
                     return 0;
             }
             else
             {
                 Type *elem_type = analyze_expression(e->node);
-                if (!are_types_compatible(array_type->data.base, elem_type))
+                if (!are_types_compatible(array_type->data.base_info.base, elem_type))
                     return 0;
             }
         }
@@ -393,96 +462,67 @@ int check_array_initializer(Type *array_type, ASTNode *initializer)
     {
         // Single value for array
         Type *elem_type = analyze_expression(initializer);
-        return are_types_compatible(array_type->data.base, elem_type);
+        return are_types_compatible(array_type->data.base_info.base, elem_type);
     }
 }
 
-// This function should be exactly as follows.
-void analyze_enum_specifier(ASTNode *node) {
-    if (!node || node->type != NODE_ENUM_SPECIFIER) return;
-
-    ASTNodeList *members = node->data.enum_specifier.members;
-    int current_value = 0;
-
-    for (ASTNodeList *m = members; m; m = m->next) {
-        ASTNode *member_node = m->node;
-        // The parser fix ensures this node is now NODE_ENUMERATOR
-        if (member_node && member_node->type == NODE_ENUMERATOR) {
-            const char *name = member_node->data.enumerator.name;
-
-            if (member_node->data.enumerator.value) {
-                // For this assignment, we'll assume the value is a simple integer constant.
-                // A full compiler would have a function to evaluate constant expressions here.
-                ASTNode* val_node = member_node->data.enumerator.value;
-                if(val_node->type == NODE_CONSTANT) {
-                    current_value = atoi(val_node->data.stringValue);
-                } else {
-                     fprintf(stderr, "Semantic Error (Line %d): Enumerator value for '%s' is not a constant integer.\n", member_node->lineno, name);
-                     semantic_errors++;
-                }
-            }
-            
-            // Create an integer type for the constant
-            Type *enum_const_type = create_type(TYPE_INT);
-            // Add the enumerator (e.g., GREEN) to the current symbol table scope
-            add_symbol(name, enum_const_type, SYM_CONSTANT);
-            
-            current_value++; // Increment for the next enumerator
-        }
-    }
-}
-
-void analyze_struct_or_union_specifier(ASTNode *node, Type* type_being_built) {
+void analyze_struct_or_union_specifier(ASTNode *node) {
     if (!node || node->type != NODE_STRUCT_OR_UNION_SPECIFIER) return;
 
-    // According to the C standard, struct/union members live in their own scope.
-    enter_scope(); 
-
-    // This is the list of 'struct_declaration' nodes.
-    ASTNodeList *member_decls = node->data.struct_or_union_specifier.members;
-    Member *head = NULL, *tail = NULL;
-    
-    // Iterate through each member declaration (e.g., 'int i;', 'float f;')
-    for (ASTNodeList *decl_item = member_decls; decl_item; decl_item = decl_item->next) {
-        ASTNode *decl_node = decl_item->node;
-        if(decl_node->type != NODE_DECLARATION) continue;
-
-        // **CRITICAL:** We can now re-use the main analyze_declaration function.
-        // It will add the member symbols ('i', 'f') to the *current scope*, 
-        // which is the temporary scope we just created for the union.
-        analyze_declaration(decl_node);
-    }
-
-    // Now, copy the symbols from the temporary scope into the Member list for the Type.
-    Scope* member_scope = get_current_scope();
-    for (int i = 0; i < member_scope->symbol_count; i++) {
-        Symbol* member_symbol = member_scope->symbols[i];
-        
-        Member *new_member = (Member*)calloc(1, sizeof(Member));
-        new_member->name = strdup(member_symbol->name);
-        new_member->type = copy_type(member_symbol->type); // Important to copy
-        
-        if (!head) {
-            head = tail = new_member;
-        } else {
-            tail->next = new_member;
-            tail = new_member;
-        }
-    }
-    
-    leave_scope(); // Destroy the temporary scope for the members.
-
-    // Attach the completed member list to the union's type information.
-    type_being_built->data.struct_union_info.members = head;
-
-    // Finally, if the struct/union has a tag name (like 'Data'), add it to the PARENT scope.
     const char* tag_name = node->data.struct_or_union_specifier.name;
-    if (tag_name) {
-        // We must add the type to the outer scope, not the member scope we just left.
-        if (!find_symbol_in_current_scope(tag_name)) { // Check before adding
-            add_symbol(tag_name, type_being_built, SYM_TYPEDEF);
+    ASTNodeList* members = node->data.struct_or_union_specifier.members;
+    Type* type = NULL;
+    
+    // Find symbol in *any* scope. Type names live in a flat namespace for this compiler.
+    Symbol* existing_symbol = tag_name ? find_symbol(tag_name) : NULL; 
+
+    // Case 1: Full definition (e.g., struct T { ... })
+    if (members) {
+        if (existing_symbol && existing_symbol->type->data.struct_union_info.members) {
+            fprintf(stderr, "Semantic Error (Line %d): Redefinition of '%s %s'.\n", node->lineno, token_to_string(node->data.struct_or_union_specifier.kind), tag_name);
+            semantic_errors++;
+            return;
         }
+        
+        type = create_type_struct_union(node->data.struct_or_union_specifier.kind == STRUCT ? TYPE_STRUCT : TYPE_UNION, tag_name);
+        if(tag_name) {
+             // If it existed as a forward-declaration, update it. Otherwise, add new.
+            if(existing_symbol) {
+                existing_symbol->type = type; // Update the type
+            } else {
+                add_symbol(tag_name, type, SYM_TYPEDEF, node->lineno);
+                add_typename(tag_name); // Also add to parser's typename list
+            }
+        }
+
+        enter_scope();
+        for (ASTNodeList* decl_item = members; decl_item; decl_item = decl_item->next) {
+            analyze_declaration(decl_item->node);
+        }
+
+        Scope* member_scope = get_current_scope();
+        Member* head = NULL, *tail = NULL;
+        for (int i = 0; i < member_scope->symbol_count; i++) {
+            Symbol* member_symbol = member_scope->symbols[i];
+            Member* new_member = (Member*)calloc(1, sizeof(Member));
+            new_member->name = strdup(member_symbol->name);
+            new_member->type = copy_type(member_symbol->type);
+            if (!head) { head = tail = new_member; } else { tail->next = new_member; tail = new_member; }
+        }
+        leave_scope();
+        type->data.struct_union_info.members = head;
     }
+    // Case 2: Forward declaration (e.g., struct T;) or Use (e.g. struct T my_var;)
+    else if (tag_name && !existing_symbol) {
+        // This is the first time we see this tag, and it has no body.
+        // Treat it as a forward declaration.
+        type = create_type_struct_union(node->data.struct_or_union_specifier.kind == STRUCT ? TYPE_STRUCT : TYPE_UNION, tag_name);
+        add_symbol(tag_name, type, SYM_TYPEDEF, node->lineno);
+        add_typename(tag_name); // Also add to parser's typename list
+    }
+    // Case 3: Use of existing type (e.g. struct T my_var;).
+    // `existing_symbol` is found, `members` is NULL. We don't need to do anything here.
+    // get_type_from_specifiers() will handle finding the type.
 }
 
 void analyze_class_specifier(ASTNode *node) {
@@ -497,9 +537,12 @@ void analyze_class_specifier(ASTNode *node) {
     if (existing_symbol && existing_symbol->kind == SYM_TYPEDEF && (existing_symbol->type->kind == TYPE_STRUCT || existing_symbol->type->kind == TYPE_UNION)) {
         if (existing_symbol->type->data.struct_union_info.members == NULL && node->data.class_specifier.members) {
             class_type = existing_symbol->type;
-        } else {
+        } else if (node->data.class_specifier.members) { // Check if we are trying to redefine
             fprintf(stderr, "Semantic Error (Line %d): Redefinition of class '%s'.\n", node->lineno, class_name);
             semantic_errors++;
+            return;
+        } else {
+            // This is just a use, like `class MyClass var;`, so we do nothing.
             return;
         }
     }
@@ -507,30 +550,35 @@ void analyze_class_specifier(ASTNode *node) {
     if (!class_type) {
         class_type = create_type(TYPE_STRUCT);
         class_type->data.struct_union_info.name = strdup(class_name);
-        add_symbol(class_name, class_type, SYM_TYPEDEF);
+        add_symbol(class_name, class_type, SYM_TYPEDEF, node->lineno);
         add_typename(class_name);
+    }
+    
+    // Only process members if this is a definition
+    if (!node->data.class_specifier.members) {
+        return;
     }
 
     Member* head = NULL, *tail = NULL;
 
-    // --- START: INHERITANCE HANDLING ---
-    ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
+     ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
     for (ASTNodeList* base_item = base_clauses; base_item; base_item = base_item->next) {
         ASTNode* base_specifier_node = base_item->node;
-        if (base_specifier_node->type != NODE_BASE_SPECIFIER) continue;
+        if (base_specifier_node->type != NODE_BASE_CLASS) continue; // FIX 1: Use NODE_BASE_CLASS
 
-        const char* base_class_name = base_specifier_node->data.base_specifier.class_name->data.type_name.name;
+        // FIX 2 & 3: Access data correctly via .base_class and .stringValue
+        const char* base_class_name = base_specifier_node->data.base_class.class_name->data.stringValue;
         Symbol* base_symbol = find_symbol(base_class_name);
 
         if (!base_symbol || base_symbol->type->kind != TYPE_STRUCT) {
-            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is not a class or struct.\n", node->lineno, base_class_name);
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is not a defined class type.\n", base_specifier_node->lineno, base_class_name);
             semantic_errors++;
             continue;
         }
 
         Type* base_type = base_symbol->type;
         if (!base_type->data.struct_union_info.members) {
-            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is an incomplete type.\n", node->lineno, base_class_name);
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is an incomplete type.\n", base_specifier_node->lineno, base_class_name);
             semantic_errors++;
             continue;
         }
@@ -565,6 +613,12 @@ void analyze_class_specifier(ASTNode *node) {
         new_member->name = strdup(member_symbol->name);
         new_member->type = copy_type(member_symbol->type);
         
+        if (member_symbol->type->storage_class == STATIC) {
+            new_member->is_static = 1;
+        } else {
+            new_member->is_static = 0;
+        }
+
         if (!head) {
             head = tail = new_member;
         } else {
@@ -572,8 +626,7 @@ void analyze_class_specifier(ASTNode *node) {
             tail = new_member;
         }
     }
-    leave_scope();
-
+    class_type->data.struct_union_info.member_scope = leave_scope();
     class_type->data.struct_union_info.members = head;
 }
 
@@ -602,7 +655,7 @@ void add_function_parameters(ASTNode *declarator)
                     const char *pname = get_name_from_declarator(param_decl->data.parameter_declaration.declarator);
                     if (pname)
                     {
-                        add_symbol(pname, param_type, SYM_VARIABLE);
+                        add_symbol(pname, param_type, SYM_VARIABLE, param_decl->lineno);
                     }
                 }
             }
@@ -625,47 +678,113 @@ void add_function_parameters(ASTNode *declarator)
 
 void analyze_declaration(ASTNode *node)
 {
-    Type *base_type = get_type_from_specifiers(node->data.declaration.specifiers);
-
-    // Check if this is a typedef
-    int is_typedef = 0;
-    for (ASTNodeList *spec = node->data.declaration.specifiers; spec; spec = spec->next)
-    {
-        if (spec->node->type == NODE_SPECIFIER && spec->node->data.specifier == TYPEDEF)
-        {
-            is_typedef = 1;
-            break;
-        }
+    if (!node || node->type != NODE_DECLARATION) return;
+    
+    // =================================================================
+    // START OF FIX #2: Make returns conditional on having declarators
+    // =================================================================
+    bool has_declarators = node->data.declaration.declarators != NULL;
+    
+    ASTNode* first_spec = node->data.declaration.specifiers->node;
+    if (first_spec->type == NODE_ENUM_SPECIFIER ){
+        analyze_enum_specifier(first_spec);
+        if (!has_declarators) return; // Only return if no variables are declared
     }
+    if (first_spec->type == NODE_STRUCT_OR_UNION_SPECIFIER) {
+        analyze_struct_or_union_specifier(first_spec);
+        if (!has_declarators) return; // Only return if no variables are declared
+    }
+    if (first_spec->type == NODE_CLASS_SPECIFIER && !has_declarators) {
+        analyze_class_specifier(first_spec);
+        return; // This logic was already correct
+    }
+    // =================================================================
+    // END OF FIX #2
+    // =================================================================
+    
+    Type *base_type = get_type_from_specifiers(node->data.declaration.specifiers);
+    int is_auto = (base_type->storage_class == AUTO);
+    if (is_auto) {
+         // C-style 'auto' is a storage class, but C++ 'auto' is a type.
+         // We'll treat it as C++ 'auto' if it's the main type.
+         // If the base type is INT (default) and storage is AUTO, it's auto.
+         if (base_type->kind != TYPE_INT) is_auto = 0; // Not 'auto' if user specified 'auto int'
+    }
+    // Check if this is a typedef
+    int is_typedef = (base_type->storage_class == TYPEDEF);
+    // for (ASTNodeList *spec = node->data.declaration.specifiers; spec; spec = spec->next)
+    // {
+    //     if (spec->node->type == NODE_SPECIFIER && spec->node->data.specifier == TYPEDEF)
+    //     {
+    //         is_typedef = 1;
+    //         break;
+    //     }
+    // }
+    
+    // This handles `struct T;` which has no declarators
     if (!node->data.declaration.declarators) {
         free(base_type); // The type is processed, we can free the temporary one.
         return;
     }
+    
     if (node->data.declaration.declarators)
     {
         for (ASTNodeList *d = node->data.declaration.declarators; d; d = d->next)
         {
             ASTNode *init_decl = d->node;
             ASTNode *declarator = init_decl->data.init_declarator.declarator;
+            ASTNode *initializer = init_decl->data.init_declarator.initializer;
             const char *name = get_name_from_declarator(declarator);
 
             if (!name)
             {
-                fprintf(stderr, "Semantic Error (Line %d): Declarator is missing a name.\n", node->lineno);
-                semantic_errors++;
-                continue;
+                if (declarator->type == NODE_QUALIFIED_ID) {
+                    // This is an out-of-class definition, e.g., int Animal::count = 0;
+                    // We're just analyzing the initializer, not adding a new symbol.
+                    // A full implementation would find the class scope and update the member.
+                    // For now, let's just analyze the initializer.
+                    if (initializer) {
+                        analyze_expression(initializer);
+                    }
+                    continue; // Skip to next declarator
+                 }
+                // This could happen for abstract declarators in typedefs, but we need a name
+                // for non-typedefs. Let's assume for now a name is required.
+                // In a fuller implementation, this might be legal for `typedef int_arr[10];`
+                 if (!is_typedef) {
+                    fprintf(stderr, "Semantic Error (Line %d): Declarator is missing a name.\n", init_decl->lineno);
+                    semantic_errors++;
+                 }
+                 // We can't free base_type here, as other declarators might use it.
+                 continue; // Skip this declarator
             }
 
-            Type *final_type = build_type_from_declarator(copy_type(base_type), declarator);
-
+            Type *final_type;
+            if (is_auto) {
+                if (!initializer) {
+                    fprintf(stderr, "Semantic Error (Line %d): Declaration of 'auto' variable '%s' requires an initializer.\n", init_decl->lineno, name);
+                    semantic_errors++;
+                    continue;
+                }
+                // The type of the variable is the type of the initializer
+                Type *initializer_type = analyze_expression(initializer);
+                if (initializer_type->kind == TYPE_UNKNOWN) {
+                    final_type = create_type(TYPE_UNKNOWN); // Propagate error
+                } else {
+                    final_type = build_type_from_declarator(copy_type(initializer_type), declarator);
+                }
+            } else {
+                final_type = build_type_from_declarator(copy_type(base_type), declarator);
+            }
             if (is_typedef)
             {
-                add_symbol(name, final_type, SYM_TYPEDEF);
+                add_symbol(name, final_type, SYM_TYPEDEF, init_decl->lineno);
                 add_typename(name);
             }
             else
             {
-                add_symbol(name, final_type, SYM_VARIABLE);
+                SymbolKind kind = (final_type->kind == TYPE_FUNCTION) ? SYM_FUNCTION : SYM_VARIABLE;
+                add_symbol(name, final_type, kind, init_decl->lineno);
             }
             if (final_type->kind == TYPE_ARRAY && init_decl->data.init_declarator.initializer &&
                 init_decl->data.init_declarator.initializer->type == NODE_INITIALIZER_LIST)
@@ -679,9 +798,9 @@ void analyze_declaration(ASTNode *node)
                 // If you want, you can also check the number of elements matches the array size
                 continue; // Skip the normal type check for arrays
             }
-            if (init_decl->data.init_declarator.initializer)
+            if (initializer && !is_auto)
             {
-                Type *initializer_type = analyze_expression(init_decl->data.init_declarator.initializer);
+                Type *initializer_type = analyze_expression(initializer);
                 if (!are_types_compatible(final_type, initializer_type))
                 {
                     fprintf(stderr, "Semantic Error (Line %d): Incompatible types in initialization of '%s'. Cannot assign '%s' to '%s'.\n",
@@ -706,13 +825,36 @@ void analyze_function_definition(ASTNode *node)
     Type *return_type = get_type_from_specifiers(node->data.function_definition.specifiers);
     const char *name = get_name_from_declarator(node->data.function_definition.declarator);
     if (!name) { 
-        fprintf(stderr, "Semantic Error (Line %d): Function definition is missing a name.\n", node->lineno);
-        semantic_errors++;
-        return; 
+        if (node->data.function_definition.declarator->type == NODE_FUNCTION_DECLARATOR &&
+             node->data.function_definition.declarator->data.function_declarator.base_declarator->type == NODE_QUALIFIED_ID)
+        {
+             // This is an out-of-class method definition.
+             // A full implementation would find the class, find the method, and analyze the body
+             // in the class's scope.
+             // For now, we'll just analyze the body in a new scope.
+             name = get_name_from_declarator(node->data.function_definition.declarator); // This will get "speak" or "bark"
+        } else {
+            fprintf(stderr, "Semantic Error (Line %d): Function definition is missing a name.\n", node->lineno);
+            semantic_errors++;
+            return; 
+        }
     }
 
     Type *func_type = build_type_from_declarator(return_type, node->data.function_definition.declarator);
-    add_symbol(name, func_type, SYM_FUNCTION);
+    
+    // Check for existing declaration
+    Symbol* existing_sym = find_symbol(name);
+    if (existing_sym) {
+        if (existing_sym->kind != SYM_FUNCTION) {
+            fprintf(stderr, "Semantic Error (Line %d): '%s' redefined as a function, but was previously declared as something else.\n", node->lineno, name);
+            semantic_errors++;
+        }
+        // Here you would also compare signatures (return type, params)
+        // For now, we just use the new definition.
+        existing_sym->type = func_type;
+    } else {
+        add_symbol(name, func_type, SYM_FUNCTION, node->lineno);
+    }
 
     // --- NEW TWO-PASS ANALYSIS ---
     FunctionAnalysisContext context = {0};
@@ -737,139 +879,6 @@ void analyze_function_definition(ASTNode *node)
     }
 }
 
-
-// void analyze_statement(ASTNode *node)
-// {
-//     if (!node)
-//         return;
-
-//     switch (node->type)
-//     {
-//     case NODE_COMPOUND_STATEMENT:
-//         enter_scope();
-//         for (ASTNodeList *item = node->data.compound_statement.items; item; item = item->next)
-//         {
-//             analyze_node(item->node);
-//         }
-//         leave_scope();
-//         break;
-//     case NODE_EXPRESSION_STATEMENT:
-//         if (node->data.expression_statement.expression)
-//         {
-//             analyze_expression(node->data.expression_statement.expression);
-//         }
-//         break;
-//     case NODE_FOR_STATEMENT:
-//     {
-//         enter_scope(); // Scope for the loop variable and body
-
-//         // 1. Analyze the INIT part
-//         if (node->data.for_statement.init)
-//         {
-//             if (node->data.for_statement.init->type == NODE_DECLARATION)
-//             {
-//                 // If it's a declaration, analyze it as such
-//                 analyze_declaration(node->data.for_statement.init);
-//             }
-//             else
-//             {
-//                 // If it's an expression statement, unwrap and analyze the expression
-//                 ASTNode *init_expr = node->data.for_statement.init->data.expression_statement.expression;
-//                 if (init_expr)
-//                 {
-//                     analyze_expression(init_expr);
-//                 }
-//             }
-//         }
-
-//         // 2. Analyze the CONDITION part
-//         if (node->data.for_statement.condition)
-//         {
-//             // Unwrap the expression from the expression statement
-//             ASTNode *cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
-//             if (cond_expr)
-//             {
-//                 Type *cond_type = analyze_expression(cond_expr);
-//                 if (cond_type && !is_scalar_type(cond_type))
-//                 {
-//                     fprintf(stderr, "Semantic Error (Line %d): Condition of for-loop must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
-//                     semantic_errors++;
-//                 }
-//             }
-//         }
-
-//         // 3. Analyze the INCREMENT part
-//         if (node->data.for_statement.increment)
-//         {
-//             // The increment part is a raw expression, so no unwrapping is needed here
-//             analyze_expression(node->data.for_statement.increment);
-//         }
-
-//         // 4. Analyze the BODY
-//         analyze_statement(node->data.for_statement.body);
-
-//         leave_scope(); // Exit the loop's scope
-//         break;
-//     }
-
-//     case NODE_IF_STATEMENT:
-//     case NODE_WHILE_STATEMENT:
-//     case NODE_DO_WHILE_STATEMENT:
-//     {
-//         Type *cond_type = NULL;
-//         if (node->type == NODE_IF_STATEMENT)
-//         {
-//             cond_type = analyze_expression(node->data.if_statement.condition);
-//             analyze_statement(node->data.if_statement.if_body);
-//             if (node->data.if_statement.else_body)
-//                 analyze_statement(node->data.if_statement.else_body);
-//         }
-//         else if (node->type == NODE_WHILE_STATEMENT)
-//         {
-//             cond_type = analyze_expression(node->data.while_statement.condition);
-//             analyze_statement(node->data.while_statement.body);
-//         }
-//         else if (node->type == NODE_DO_WHILE_STATEMENT)
-//         {
-//             analyze_statement(node->data.do_while_statement.body);
-//             cond_type = analyze_expression(node->data.do_while_statement.condition);
-//         }
-//         if (cond_type && !is_scalar_type(cond_type))
-//         {
-//             fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
-//             semantic_errors++;
-//         }
-//         break;
-//     }
-//     case NODE_RETURN_STATEMENT:
-//         if (!current_function_return_type)
-//         {
-//             fprintf(stderr, "Semantic Error (Line %d): return statement not in a function.\n", node->lineno);
-//             semantic_errors++;
-//         }
-//         else
-//         {
-//             Type *return_expr_type = node->data.return_statement.expression ? analyze_expression(node->data.return_statement.expression) : create_type(TYPE_VOID);
-//             if (!are_types_compatible(current_function_return_type, return_expr_type))
-//             {
-//                 fprintf(stderr, "Semantic Error (Line %d): Incompatible return type. Expected '%s' but got '%s'.\n", node->lineno, type_to_string(current_function_return_type), type_to_string(return_expr_type));
-//                 semantic_errors++;
-//             }
-//             else if (current_function_return_type->kind != return_expr_type->kind)
-//             {
-//                 // Insert cast node for implicit conversion
-//                 node->data.return_statement.expression = create_cast_expr_node(
-//                     create_typename_node(type_to_string(current_function_return_type)),
-//                     node->data.return_statement.expression);
-//             }
-//         }
-//         break;
-//     default:
-//         // For simple statements like break, continue, etc., there's no analysis needed.
-//         break;
-//     }
-// }
-
 Type *analyze_expression(ASTNode *node)
 {
     if (!node)
@@ -877,101 +886,146 @@ Type *analyze_expression(ASTNode *node)
 
     switch (node->type)
     {
-    case NODE_CONSTANT:
-        return infer_constant_type(node->data.stringValue);
-    case NODE_STRING_LITERAL:
-        return create_type(TYPE_STRING);
+        case NODE_CONSTANT:
+            return infer_constant_type(node->data.stringValue);
+        case NODE_STRING_LITERAL:
+            return create_type(TYPE_STRING);
 
-    case NODE_IDENTIFIER:
-    {
-        Symbol *sym = find_symbol(node->data.stringValue);
-        if (!sym)
+        case NODE_IDENTIFIER:
         {
-            fprintf(stderr, "Semantic Error (Line %d): Use of undeclared identifier '%s'.\n", node->lineno, node->data.stringValue);
+            Symbol *sym = find_symbol(node->data.stringValue);
+            if (!sym)
+            {
+                fprintf(stderr, "Semantic Error (Line %d): Use of undeclared identifier '%s'.\n", node->lineno, node->data.stringValue);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+            if (sym->kind == SYM_TYPEDEF)
+            {
+                fprintf(stderr, "Semantic Error (Line %d): Cannot use a typename '%s' as an expression.\n", node->lineno, node->data.stringValue);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+            return sym->type;
+        }
+
+        case NODE_QUALIFIED_ID: { // <--- NEW IMPLEMENTATION
+            // This is a simplified implementation for one level of qualification (e.g., Class::member)
+            if (!node->data.qualified_id.qualifiers || !node->data.qualified_id.qualifiers->node) {
+                return analyze_expression(node->data.qualified_id.identifier); // Fallback to simple identifier
+            }
+            
+            // 1. Get Qualifier Type (e.g., "Animal")
+            ASTNode* qualifier_node = node->data.qualified_id.qualifiers->node;
+            const char* qualifier_name = NULL;
+            
+            // The qualifier in the AST is either a TYPENAME or IDENTIFIER
+            if (qualifier_node->type == NODE_TYPENAME || qualifier_node->type == NODE_IDENTIFIER) {
+                qualifier_name = qualifier_node->data.stringValue;
+            } else {
+                fprintf(stderr, "Semantic Error (Line %d): Invalid scope qualifier.\n", node->lineno);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+
+            Symbol* qualifier_sym = find_symbol(qualifier_name);
+            if (!qualifier_sym || qualifier_sym->kind != SYM_TYPEDEF) {
+                fprintf(stderr, "Semantic Error (Line %d): '%s' is not a class, struct, or namespace name.\n", node->lineno, qualifier_name);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+            Type* qualifier_type = qualifier_sym->type;
+            if (qualifier_type->kind != TYPE_STRUCT && qualifier_type->kind != TYPE_UNION) {
+                 fprintf(stderr, "Semantic Error (Line %d): '%s' is not a class or struct.\n", node->lineno, qualifier_name);
+                 semantic_errors++;
+                 return create_type(TYPE_UNKNOWN);
+            }
+
+            // 2. Get Member Name (e.g., "count")
+            const char* member_name = node->data.qualified_id.identifier->data.stringValue;
+
+            // 3. Find member in the class/struct's member list
+            for (Member *m = qualifier_type->data.struct_union_info.members; m; m = m->next) {
+                if (strcmp(m->name, member_name) == 0) {
+                    if (!m->is_static) {
+                        fprintf(stderr, "Semantic Error (Line %d): Cannot access non-static member '%s' using '::'.\n", node->lineno, member_name);
+                        semantic_errors++;
+                        return create_type(TYPE_UNKNOWN);
+                    }
+                    return m->type; // Found it, return its type
+                }
+            }
+            
+            fprintf(stderr, "Semantic Error (Line %d): No member named '%s' in '%s'.\n", node->lineno, member_name, qualifier_name);
             semantic_errors++;
             return create_type(TYPE_UNKNOWN);
         }
-        if (sym->kind == SYM_TYPEDEF)
+
+        case NODE_BINARY_EXPR:
         {
-            fprintf(stderr, "Semantic Error (Line %d): Cannot use a typename '%s' as an expression.\n", node->lineno, node->data.stringValue);
+            Type *left_type = analyze_expression(node->data.binary_expr.left);
+            Type *right_type = analyze_expression(node->data.binary_expr.right);
+
+            // String concatenation
+            if (node->data.binary_expr.op == '+')
+            {
+                if ((left_type->kind == TYPE_STRING || (left_type->kind == TYPE_POINTER && left_type->data.base_info.base->kind == TYPE_CHAR)) ||
+                    (right_type->kind == TYPE_STRING || (right_type->kind == TYPE_POINTER && right_type->data.base_info.base->kind == TYPE_CHAR)))
+                {
+                    return create_type(TYPE_STRING);
+                }
+            }
+
+            // Insert cast nodes for arithmetic type promotion
+            if (is_arithmetic_type(left_type) && is_arithmetic_type(right_type))
+            {
+                Type *result_type = get_common_arithmetic_type(left_type, right_type);
+                if (left_type->kind != result_type->kind)
+                {
+                    node->data.binary_expr.left = create_cast_expr_node(
+                        create_typename_node(type_to_string(result_type)),
+                        node->data.binary_expr.left);
+                }
+                if (right_type->kind != result_type->kind)
+                {
+                    node->data.binary_expr.right = create_cast_expr_node(
+                        create_typename_node(type_to_string(result_type)),
+                        node->data.binary_expr.right);
+                }
+                return result_type;
+            }
+
+            // Basic pointer arithmetic: ptr + int
+            if (left_type->kind == TYPE_POINTER && is_integer_type(right_type))
+                return left_type;
+            if (is_integer_type(left_type) && right_type->kind == TYPE_POINTER)
+                return right_type;
+
+            fprintf(stderr, "Semantic Error (Line %d): Invalid operands for binary operator '%s'. Types are '%s' and '%s'.\n",
+                    node->lineno, token_to_string(node->data.binary_expr.op), type_to_string(left_type), type_to_string(right_type));
             semantic_errors++;
             return create_type(TYPE_UNKNOWN);
         }
-        return sym->type;
-    }
 
-        case NODE_QUALIFIED_ID: {
-            // Compiler would look up the qualifiers
-            // to find the correct scope, then look for the identifier in that scope.
-            // For now, just analyzing the the final identifier.
-            return analyze_expression(node->data.qualified_id.identifier);
-        }
-
-    case NODE_BINARY_EXPR:
-    {
-        Type *left_type = analyze_expression(node->data.binary_expr.left);
-        Type *right_type = analyze_expression(node->data.binary_expr.right);
-
-        // String concatenation
-        if (node->data.binary_expr.op == '+')
+        case NODE_ASSIGNMENT:
         {
-            if ((left_type->kind == TYPE_STRING || (left_type->kind == TYPE_POINTER && left_type->data.base->kind == TYPE_CHAR)) ||
-                (right_type->kind == TYPE_STRING || (right_type->kind == TYPE_POINTER && right_type->data.base->kind == TYPE_CHAR)))
+            Type *lvalue_type = analyze_expression(node->data.assignment.lvalue);
+            Type *rvalue_type = analyze_expression(node->data.assignment.rvalue);
+            if (!are_types_compatible(lvalue_type, rvalue_type))
             {
-                return create_type(TYPE_STRING);
+                fprintf(stderr, "Semantic Error (Line %d): Incompatible types in assignment. Cannot assign '%s' to '%s'.\n",
+                        node->lineno, type_to_string(rvalue_type), type_to_string(lvalue_type));
+                semantic_errors++;
             }
-        }
-
-        // Insert cast nodes for arithmetic type promotion
-        if (is_arithmetic_type(left_type) && is_arithmetic_type(right_type))
-        {
-            Type *result_type = get_common_arithmetic_type(left_type, right_type);
-            if (left_type->kind != result_type->kind)
+            else if (lvalue_type->kind != rvalue_type->kind && (lvalue_type->kind != TYPE_UNKNOWN && rvalue_type->kind != TYPE_UNKNOWN)) // Don't cast if one is unknown
             {
-                node->data.binary_expr.left = create_cast_expr_node(
-                    create_typename_node(type_to_string(result_type)),
-                    node->data.binary_expr.left);
+                // Insert cast node for implicit conversion
+                node->data.assignment.rvalue = create_cast_expr_node(
+                    create_typename_node(type_to_string(lvalue_type)),
+                    node->data.assignment.rvalue);
             }
-            if (right_type->kind != result_type->kind)
-            {
-                node->data.binary_expr.right = create_cast_expr_node(
-                    create_typename_node(type_to_string(result_type)),
-                    node->data.binary_expr.right);
-            }
-            return result_type;
+            return lvalue_type;
         }
-
-        // Basic pointer arithmetic: ptr + int
-        if (left_type->kind == TYPE_POINTER && is_integer_type(right_type))
-            return left_type;
-        if (is_integer_type(left_type) && right_type->kind == TYPE_POINTER)
-            return right_type;
-
-        fprintf(stderr, "Semantic Error (Line %d): Invalid operands for binary operator '%s'. Types are '%s' and '%s'.\n",
-                node->lineno, token_to_string(node->data.binary_expr.op), type_to_string(left_type), type_to_string(right_type));
-        semantic_errors++;
-        return create_type(TYPE_UNKNOWN);
-    }
-
-    case NODE_ASSIGNMENT:
-    {
-        Type *lvalue_type = analyze_expression(node->data.assignment.lvalue);
-        Type *rvalue_type = analyze_expression(node->data.assignment.rvalue);
-        if (!are_types_compatible(lvalue_type, rvalue_type))
-        {
-            fprintf(stderr, "Semantic Error (Line %d): Incompatible types in assignment. Cannot assign '%s' to '%s'.\n",
-                    node->lineno, type_to_string(rvalue_type), type_to_string(lvalue_type));
-            semantic_errors++;
-        }
-        else if (lvalue_type->kind != rvalue_type->kind)
-        {
-            // Insert cast node for implicit conversion
-            node->data.assignment.rvalue = create_cast_expr_node(
-                create_typename_node(type_to_string(lvalue_type)),
-                node->data.assignment.rvalue);
-        }
-        return lvalue_type;
-    }
         case NODE_PREFIX_UNARY_EXPR:
         case NODE_POSTFIX_UNARY_EXPR:
         case NODE_UNARY_EXPR: {
@@ -984,7 +1038,7 @@ Type *analyze_expression(ASTNode *node)
                         semantic_errors++;
                         return create_type(TYPE_UNKNOWN);
                     }
-                    return operand_type->data.base;
+                    return operand_type->data.base_info.base;
                 case '!': return create_type(TYPE_INT); // Logical NOT always returns an int (0 or 1)
                 default: return operand_type; // For +/-/~/++/--
             }
@@ -993,9 +1047,9 @@ Type *analyze_expression(ASTNode *node)
         case NODE_FUNC_CALL: {
             // This is a simplified version. A full version would match argument types.
             Type* func_expr_type = analyze_expression(node->data.func_call.function);
-            if (func_expr_type->kind == TYPE_POINTER && func_expr_type->data.base->kind == TYPE_FUNCTION) {
+            if (func_expr_type->kind == TYPE_POINTER && func_expr_type->data.base_info.base->kind == TYPE_FUNCTION) {
                 // Calling a function pointer
-                return func_expr_type->data.base->data.function_sig.return_type;
+                return func_expr_type->data.base_info.base->data.function_sig.return_type;
             }
             if (func_expr_type->kind != TYPE_FUNCTION) {
                  fprintf(stderr, "Semantic Error (Line %d): Called object is not a function or function pointer.\n", node->lineno);
@@ -1005,105 +1059,117 @@ Type *analyze_expression(ASTNode *node)
             return func_expr_type->data.function_sig.return_type;
         }
 
-    case NODE_CONDITIONAL_EXPR:
-    {
-        Type *cond_type = analyze_expression(node->data.conditional_expr.condition);
-        Type *true_type = analyze_expression(node->data.conditional_expr.true_expr);
-        Type *false_type = analyze_expression(node->data.conditional_expr.false_expr);
-        if (!is_scalar_type(cond_type))
+        case NODE_CONDITIONAL_EXPR:
         {
-            fprintf(stderr, "Semantic Error (Line %d): Condition in ternary operator must be scalar, got '%s'.\n", node->lineno, type_to_string(cond_type));
-            semantic_errors++;
-        }
-        if (are_types_compatible(true_type, false_type))
-        {
-            Type *result_type = get_common_arithmetic_type(true_type, false_type);
-            // Insert cast nodes if needed
-            if (true_type->kind != result_type->kind)
+            Type *cond_type = analyze_expression(node->data.conditional_expr.condition);
+            Type *true_type = analyze_expression(node->data.conditional_expr.true_expr);
+            Type *false_type = analyze_expression(node->data.conditional_expr.false_expr);
+            if (!is_scalar_type(cond_type))
             {
-                node->data.conditional_expr.true_expr = create_cast_expr_node(
-                    create_typename_node(type_to_string(result_type)),
-                    node->data.conditional_expr.true_expr);
+                fprintf(stderr, "Semantic Error (Line %d): Condition in ternary operator must be scalar, got '%s'.\n", node->lineno, type_to_string(cond_type));
+                semantic_errors++;
             }
-            if (false_type->kind != result_type->kind)
+            if (are_types_compatible(true_type, false_type))
             {
-                node->data.conditional_expr.false_expr = create_cast_expr_node(
-                    create_typename_node(type_to_string(result_type)),
-                    node->data.conditional_expr.false_expr);
+                Type *result_type = get_common_arithmetic_type(true_type, false_type);
+                // Insert cast nodes if needed
+                if (true_type->kind != result_type->kind)
+                {
+                    node->data.conditional_expr.true_expr = create_cast_expr_node(
+                        create_typename_node(type_to_string(result_type)),
+                        node->data.conditional_expr.true_expr);
+                }
+                if (false_type->kind != result_type->kind)
+                {
+                    node->data.conditional_expr.false_expr = create_cast_expr_node(
+                        create_typename_node(type_to_string(result_type)),
+                        node->data.conditional_expr.false_expr);
+                }
+                return result_type;
             }
-            return result_type;
-        }
-        else
-        {
-            fprintf(stderr, "Semantic Error (Line %d): Types in ternary operator branches are incompatible: '%s' and '%s'.\n", node->lineno, type_to_string(true_type), type_to_string(false_type));
-            semantic_errors++;
-            return create_type(TYPE_UNKNOWN);
-        }
-    }
-
-    case NODE_CAST_EXPRESSION:
-    {
-        // Already a cast node, just return the type
-        ASTNode *type_name_node = node->data.cast_expr.type_name;
-        if (type_name_node && type_name_node->type == NODE_DECLARATION)
-        {
-            return get_type_from_specifiers(type_name_node->data.declaration.specifiers);
-        }
-        // Fallback: treat as unknown
-        return create_type(TYPE_UNKNOWN);
-    }
-
-    case NODE_ARRAY_SUBSCRIPT:
-    {
-        Type *array_type = analyze_expression(node->data.array_subscript.array);
-        Type *index_type = analyze_expression(node->data.array_subscript.index);
-
-        if (array_type->kind != TYPE_ARRAY && array_type->kind != TYPE_POINTER) {
-            fprintf(stderr, "Semantic Error (Line %d): Subscripted value is not an array or pointer.\n", node->lineno);
-            semantic_errors++;
-            return create_type(TYPE_UNKNOWN);
-        }
-
-        if (!is_integer_type(index_type)) {
-            fprintf(stderr, "Semantic Error (Line %d): Array subscript is not an integer.\n", node->lineno);
-            semantic_errors++;
-        }
-
-        return array_type->data.base; // The type of the result is the base type of the array
-    }
-    case NODE_MEMBER_ACCESS:
-    {
-        Type *object_type = analyze_expression(node->data.member_access.object);
-        const char *member_name = node->data.member_access.member_name;
-
-        if (node->data.member_access.is_pointer) {
-            if (object_type->kind != TYPE_POINTER) {
-                fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a pointer to a structure or union.\n", node->lineno, member_name);
+            else
+            {
+                fprintf(stderr, "Semantic Error (Line %d): Types in ternary operator branches are incompatible: '%s' and '%s'.\n", node->lineno, type_to_string(true_type), type_to_string(false_type));
                 semantic_errors++;
                 return create_type(TYPE_UNKNOWN);
             }
-            object_type = object_type->data.base; // Dereference the pointer to get the struct/union type
         }
 
-        if (object_type->kind != TYPE_STRUCT && object_type->kind != TYPE_UNION) {
-            fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a structure or union.\n", node->lineno, member_name);
-            semantic_errors++;
+        case NODE_CAST_EXPRESSION:
+        {
+            // Already a cast node, just return the type
+            ASTNode *type_name_node = node->data.cast_expr.type_name;
+            if (type_name_node && type_name_node->type == NODE_DECLARATION)
+            {
+                return get_type_from_specifiers(type_name_node->data.declaration.specifiers);
+            }
+            // Fallback: treat as unknown
             return create_type(TYPE_UNKNOWN);
         }
 
-        // Find the member in the type's member list
-        for (Member *m = object_type->data.struct_union_info.members; m; m = m->next) {
-            if (strcmp(m->name, member_name) == 0) {
-                return m->type; // Found it, return its type
-            }
-        }
+        case NODE_ARRAY_SUBSCRIPT:
+        {
+            Type *array_type = analyze_expression(node->data.array_subscript.array);
+            Type *index_type = analyze_expression(node->data.array_subscript.index);
 
-        fprintf(stderr, "Semantic Error (Line %d): No member named '%s' in struct or union.\n", node->lineno, member_name);
-        semantic_errors++;
-        return create_type(TYPE_UNKNOWN);
-    }
-    default:
-        return create_type(TYPE_UNKNOWN);
+            if (array_type->kind != TYPE_ARRAY && array_type->kind != TYPE_POINTER) {
+                fprintf(stderr, "Semantic Error (Line %d): Subscripted value is not an array or pointer.\n", node->lineno);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+
+            if (!is_integer_type(index_type)) {
+                fprintf(stderr, "Semantic Error (Line %d): Array subscript is not an integer.\n", node->lineno);
+                semantic_errors++;
+            }
+
+            return array_type->data.base_info.base; // The type of the result is the base type of the array
+        }
+        case NODE_MEMBER_ACCESS:
+        {
+            Type *object_type = analyze_expression(node->data.member_access.object);
+            const char *member_name = node->data.member_access.member_name;
+
+            if (node->data.member_access.is_pointer) {
+                if (object_type->kind != TYPE_POINTER) {
+                    fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a pointer to a structure or union.\n", node->lineno, member_name);
+                    semantic_errors++;
+                    return create_type(TYPE_UNKNOWN);
+                }
+                object_type = object_type->data.base_info.base; // Dereference the pointer to get the struct/union type
+            }
+            
+            if (object_type->kind == TYPE_UNKNOWN) {
+                // Error already reported for undeclared identifier, just stop.
+                return create_type(TYPE_UNKNOWN);
+            }
+
+            if (object_type->kind != TYPE_STRUCT && object_type->kind != TYPE_UNION) {
+                fprintf(stderr, "Semantic Error (Line %d): Request for member '%s' in something not a structure or union (got %s).\n", 
+                    node->lineno, member_name, type_to_string(object_type));
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
+
+            // Find the member in the type's member list
+            for (Member *m = object_type->data.struct_union_info.members; m; m = m->next) {
+                if (strcmp(m->name, member_name) == 0) {
+                    return m->type; // Found it, return its type
+                }
+            }
+
+            fprintf(stderr, "Semantic Error (Line %d): No member named '%s' in struct or union.\n", node->lineno, member_name);
+            semantic_errors++;
+            return create_type(TYPE_UNKNOWN);
+        }
+        case NODE_LAMBDA_EXPR: {
+            Type* func_type = create_type(TYPE_FUNCTION);
+            func_type->data.function_sig.return_type = create_type(TYPE_INT);
+            func_type->data.function_sig.params = node->data.lambda_expr.params;
+            return create_pointer_type(func_type);
+        }
+        default:
+            return create_type(TYPE_UNKNOWN);
     }
 }
 
@@ -1120,32 +1186,33 @@ void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass 
         }
         break;
     case NODE_DECLARATION:
-        if (node->data.declaration.specifiers && node->data.declaration.specifiers->node->type == NODE_CLASS_SPECIFIER) {
-            analyze_class_specifier(node->data.declaration.specifiers->node);
-        } else {
-            analyze_declaration(node);
+        // =================================================================
+        // START OF FIX #1: Remove the entire "pre-pass" block
+        // =================================================================
+        /*
+        // Pre-pass for definitions that create types (struct/union/class)
+        if (node->data.declaration.specifiers) {
+            ASTNode* spec_node = node->data.declaration.specifiers->node;
+            if (spec_node->type == NODE_STRUCT_OR_UNION_SPECIFIER && spec_node->data.struct_or_union_specifier.members) {
+                analyze_struct_or_union_specifier(spec_node);
+            } else if (spec_node->type == NODE_CLASS_SPECIFIER && spec_node->data.class_specifier.members) {
+                analyze_class_specifier(spec_node);
+            }
         }
+        */
+        // =================================================================
+        // END OF FIX #1
+        // =================================================================
+        
+        analyze_declaration(node);
         break;
     case NODE_FUNCTION_DEFINITION:
         analyze_function_definition(node);
         break;
-    case NODE_CLASS_SPECIFIER: // Handle forward declarations like "class Animal;"
-        if (node->data.class_specifier.name && !node->data.class_specifier.members) {
-             if (!find_symbol(node->data.class_specifier.name)) {
-                // It's a forward declaration. Create an incomplete type.
-                Type* incomplete_type = create_type(TYPE_STRUCT);
-                incomplete_type->data.struct_union_info.name = strdup(node->data.class_specifier.name);
-                incomplete_type->data.struct_union_info.members = NULL; // Mark as incomplete
-                add_symbol(node->data.class_specifier.name, incomplete_type, SYM_TYPEDEF);
-                add_typename(node->data.class_specifier.name);
-            }
-        }
-        break;
+    // Remove the NODE_CLASS_SPECIFIER case here, it's handled by NODE_DECLARATION
     default:
-        // If it's a statement, analyze it as such.
-        // Expressions are handled recursively by statement analyzers.
-        if (context) { // FIX: Only call this if we are inside a function
-             analyze_statement_with_context(node, context);
+        if (context) {
+            analyze_statement_with_context(node, context);
         }
         break;
     }

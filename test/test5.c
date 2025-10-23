@@ -1,9 +1,6 @@
 // Simple class definition and usage
 typedef int myint;
 
-// Forward declare Animal so getSecret can use it
-class Animal; 
-
 // Global variable to demonstrate scope resolution
 int age = 100;
 

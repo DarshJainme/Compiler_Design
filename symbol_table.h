@@ -1,7 +1,10 @@
 #ifndef SYMBOL_TABLE
 #define SYMBOL_TABLE
 
+struct Type;
+struct ASTNode;
 #include "types.h"
+#include "semantic.h"
 
 #define MAX_SYMBOLS 1024
 
@@ -17,7 +20,7 @@ typedef enum {
 // Represents a single entry (symbol) in the table
 typedef struct Symbol {
     char* name;
-    Type* type;
+    struct Type* type;
     SymbolKind kind;
     int line_declared;
 } Symbol;
@@ -34,11 +37,12 @@ void init_symbol_table();
 void destroy_scope(Scope* scope);
 Scope* get_current_scope();
 void enter_scope();
-void leave_scope();
+Scope* leave_scope();
 
-Symbol* add_symbol(const char* name, Type* type, SymbolKind kind);
+Symbol* add_symbol(const char* name, struct Type* type, SymbolKind kind, int lineno);
 Symbol* find_symbol(const char* name);
 Symbol* find_symbol_in_current_scope(const char* name);
 void print_symbol_table(Scope *scope, int depth);
+const char* symbol_kind_to_strign(SymbolKind kind);
 
 #endif // SYMBOL_TABLE

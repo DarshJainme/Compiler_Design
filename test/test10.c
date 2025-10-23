@@ -9,6 +9,6 @@ int main(){
     fptr = &add;
 
     // Call the function via ptr
-    printf("%d", fptr(10, 5));
+    // printf("%d", fptr(10, 5));
     return 0;
 }

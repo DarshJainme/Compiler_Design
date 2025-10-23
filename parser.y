@@ -342,7 +342,7 @@ block_item_list
     : block_item
         { $$ = create_list_node($1); }
     | block_item_list block_item
-        { $$ = append_to_list($1, $2); else $$ = $1; }
+        { if ($2) $$ = append_to_list($1, $2); else $$ = $1; }
         // adding error recovery
     ;
 
@@ -673,11 +673,11 @@ int main(int argc, char **argv) {
         printf("\n--- Performing Semantic Analysis ---\n");
         if (analyze_ast(root)) {
             printf("--- Semantic Analysis Successful ---\n");
-            // printf("\n--- Final Symbol Table ---\n");
-            // print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
-            // printf("--- End of Symbol Table ---\n\n");
-            printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
-            if (root) print_ast(root, 0);
+            printf("\n--- Final Symbol Table ---\n");
+            print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
+            printf("--- End of Symbol Table ---\n\n");
+            // printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
+            // if (root) print_ast(root, 0);
             
             // printf("\n--- Generating Three-Address Code ---\n");
             // generate_tac(root);

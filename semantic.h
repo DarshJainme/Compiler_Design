@@ -21,7 +21,10 @@ typedef struct FunctionAnalysisContext {
 
 struct ASTNode;
 void analyze_enum_specifier(struct ASTNode* node);
-void analyze_struct_or_union_specifier(struct ASTNode *node, struct Type* type_being_built); 
+void analyze_struct_or_union_specifier(struct ASTNode *node); 
+
+struct Type *process_enum_specifier(struct ASTNode* node);
+struct Type *process_struct_or_union_specifier(struct ASTNode *node);
 
 // The main entry point for semantic analysis. Returns 1 on success, 0 on error.
 int analyze_ast(ASTNode* root);

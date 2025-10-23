@@ -89,6 +89,7 @@ typedef struct ASTNodeList {
 typedef struct Member {
     char *name;
     struct Type *type;
+    int is_static; // to track static members
     struct Member *next;
 } Member;
 

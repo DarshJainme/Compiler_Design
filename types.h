@@ -2,7 +2,7 @@
 #define TYPES_H
 
 #include "ast.h"
-#include "semantic.h"
+#include <stdbool.h>
 
 // Enum for basic type kinds
 typedef enum {
@@ -26,18 +26,24 @@ typedef enum {
 } TypeKind;
 
 // Forward declarations
-struct Type;
-struct Symbol;
+typedef struct Type Type;
+struct Scope;
+
+typedef struct StructUnionInfo {
+    char *name;
+    struct Member *members; // linked list of members for struct/union
+    struct Scope* member_scope;
+} StructUnionInfo;
 
 // Structure to represent a type in our compiler
-typedef struct Type {
+struct Type {
     TypeKind kind;
-    unsigned int is_const : 1;
-    unsigned int is_unsigned : 1;
+    bool is_const;
+    bool is_unsigned;
+    int storage_class;  // to store STATIC, EXTERN, etc.
 
     union {
-        // For pointers and arrays
-        struct Type* base;
+        struct { Type* base; } base_info;
 
         // For functions
         struct {
@@ -46,12 +52,9 @@ typedef struct Type {
         } function_sig;
         
         // For structs and unions
-        struct {
-            char* name;
-            Member* members; // A dedicated scope for struct members
-        } struct_union_info;
+        struct StructUnionInfo struct_union_info;
     } data;
-} Type;
+};
 
 
 // Core type creation
@@ -62,6 +65,8 @@ Type* copy_type(Type* type);
 Type* create_pointer_type(Type* base);
 Type* create_reference_type(Type* base);
 Type* create_array_type(Type* base, int size);
+Type *create_enum_type(const char *name);
+Type* create_type_struct_union(TypeKind kind, const char* name);
 Type* build_type_from_declarator(Type* base_type, ASTNode* declarator);
 
 // Type information and checking
