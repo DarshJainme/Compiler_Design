@@ -28,6 +28,7 @@ typedef enum {
     TAC_LABEL,      // L1:
     TAC_GOTO,       // goto L1
     TAC_IFZ,        // ifz arg1 goto L1 (For if arg1 is zero)
+    TAC_IFNZ,       // if non zero so that code part becomes simpler.
     
     // Function calls
     TAC_PARAM,      // param arg1
@@ -99,5 +100,11 @@ void generate_tac(ASTNode* root);
 
 // Recursive function to generate TAC for an expression
 TacAddr* gen_tac_for_expr(ASTNode* node);
+void gen_tac_for_node(ASTNode* node);
 
+/* For different loops, stack management */
+void push_loop_labels(TacAddr* continue_label, TacAddr* break_label);
+void pop_loop_labels();
+TacAddr* get_loop_continue_label();
+TacAddr* get_loop_break_label();
 #endif // TAC_H

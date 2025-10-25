@@ -10,6 +10,43 @@ TacInstr* tac_list_tail = NULL;
 static int temp_count = 0;
 static int label_count = 0;
 
+// A simple stack to keep track of loop labels for break/continue
+#define MAX_LOOP_DEPTH 50
+static TacAddr* continue_stack[MAX_LOOP_DEPTH];
+static TacAddr* break_stack[MAX_LOOP_DEPTH];
+static int loop_stack_ptr = -1;
+
+void push_loop_labels(TacAddr* continue_label, TacAddr* break_label) {
+    if (loop_stack_ptr < MAX_LOOP_DEPTH - 1) {
+        loop_stack_ptr++;
+        continue_stack[loop_stack_ptr] = continue_label;
+        break_stack[loop_stack_ptr] = break_label;
+    } else {
+        fprintf(stderr, "Fatal: Exceeded maximum loop nesting depth.\n");
+        exit(1);
+    }
+}
+
+void pop_loop_labels() {
+    if (loop_stack_ptr >= 0) {
+        loop_stack_ptr--;
+    }
+}
+
+TacAddr* get_loop_continue_label() {
+    if (loop_stack_ptr >= 0) {
+        return continue_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
+
+TacAddr* get_loop_break_label() {
+    if (loop_stack_ptr >= 0) {
+        return break_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
+
 /* --- Address Creation Helpers --- */
 
 TacAddr* new_temp() {
@@ -94,7 +131,8 @@ void print_tac() {
             printf("%s", (instr->op == TAC_BEGIN_FUNC) ? "begin_func" : "end_func");
         } else {
             printf("\t");
-            if (instr->res) {
+            // Only print "res = " for non-jump/non-control instructions
+            if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ && instr->op != TAC_IFNZ && instr->op != TAC_RETURN && instr->op != TAC_PARAM) {
                 print_addr(instr->res);
                 printf(" = ");
             }
@@ -111,9 +149,17 @@ void print_tac() {
                 case TAC_LE: print_addr(instr->arg1); printf(" <= "); print_addr(instr->arg2); break;
                 case TAC_GT: print_addr(instr->arg1); printf(" > "); print_addr(instr->arg2); break;
                 case TAC_GE: print_addr(instr->arg1); printf(" >= "); print_addr(instr->arg2); break;
+                // Correction in printing jump instructions
                 case TAC_GOTO: printf("goto "); print_addr(instr->res); break;
                 case TAC_IFZ: printf("ifz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
-                case TAC_RETURN: printf("return "); print_addr(instr->arg1); break;
+                case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
+                case TAC_RETURN: printf("return "); 
+                    if (instr->res) {
+                        // return can have an optional value
+                        printf(" ");
+                        print_addr(instr->res);
+                    }
+                    break;
                 // We will be adding more cases here as we implement them
                 default: printf("UNKNOWN_OP %d",instr->op); break;
             }
@@ -232,124 +278,32 @@ TacAddr* gen_tac_for_expr(ASTNode* node) {
 }
 
 void gen_tac_for_node(ASTNode* node) {
+    // This function is now only called for simple cases that aren't
+    // control-flow statements. The complex logic is in semantic.c.
     if (!node) return;
 
     switch (node->type) {
-        case NODE_TRANSLATION_UNIT:
-            for (ASTNodeList* item = node->data.items_list; item; item = item->next) {
-                gen_tac_for_node(item->node);
-            }
-            break;
-
         case NODE_DECLARATION: {
-            // Handle declarations
+            // This handles declarations like `int x = 5;`
             if (!node->data.declaration.declarators) break;
 
             for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
                 ASTNode* init_decl = d_item->node;
                 if (init_decl->data.init_declarator.initializer) {
-                    // This is a declaration with an initializer, e.g., int x = 5;
-                    // We generate TAC for the assignment part.
+                    // gen_tac_for_expr works because the symbols were already added by semantic.c
                     TacAddr* lvalue = gen_tac_for_expr(init_decl->data.init_declarator.declarator);
                     TacAddr* rvalue = gen_tac_for_expr(init_decl->data.init_declarator.initializer);
-                    emit(TAC_ASSIGN, lvalue, rvalue, NULL);
+                    if (lvalue && rvalue) {
+                        emit(TAC_ASSIGN, lvalue, rvalue, NULL);
+                    }
                 }
             }
             break;
         }
-        case NODE_FUNCTION_DEFINITION:
-            emit(TAC_BEGIN_FUNC, NULL, NULL, NULL);
-            // In a real implementation, you'd handle parameters here
-            gen_tac_for_node(node->data.function_definition.body);
-            emit(TAC_END_FUNC, NULL, NULL, NULL);
-            break;
-
-        case NODE_COMPOUND_STATEMENT:
-            for (ASTNodeList* item = node->data.compound_statement.items; item; item = item->next) {
-                gen_tac_for_node(item->node);
-            }
-            break;
-
-        case NODE_EXPRESSION_STATEMENT:
-            if (node->data.expression_statement.expression) {
-                gen_tac_for_expr(node->data.expression_statement.expression);
-            }
-            break;
-
-        case NODE_IF_STATEMENT: {
-            TacAddr* else_label = new_label_addr();
-            TacAddr* end_label = new_label_addr();
-            
-            // Condition
-            TacAddr* cond = gen_tac_for_expr(node->data.if_statement.condition);
-            emit(TAC_IFZ, else_label, cond, NULL); // If condition is false, jump to else
-
-            // If body
-            gen_tac_for_node(node->data.if_statement.if_body);
-            emit(TAC_GOTO, end_label, NULL, NULL); // Skip else part
-
-            // Else part
-            emit(TAC_LABEL, else_label, NULL, NULL);
-            if (node->data.if_statement.else_body) {
-                gen_tac_for_node(node->data.if_statement.else_body);
-            }
-
-            // End label
-            emit(TAC_LABEL, end_label, NULL, NULL);
-            break;
-        }
-
-        case NODE_WHILE_STATEMENT: {
-            TacAddr* start_label = new_label_addr();
-            TacAddr* end_label = new_label_addr();
-
-            emit(TAC_LABEL, start_label, NULL, NULL); // Label for loop start
-
-            // Condition
-            TacAddr* cond = gen_tac_for_expr(node->data.while_statement.condition);
-            emit(TAC_IFZ, end_label, cond, NULL); // If condition is false, jump to end
-
-            // Body
-            gen_tac_for_node(node->data.while_statement.body);
-            emit(TAC_GOTO, start_label, NULL, NULL); // Jump back to the start
-
-            // End label
-            emit(TAC_LABEL, end_label, NULL, NULL);
-            break;
-        }
-
-        case NODE_UNTIL_STATEMENT: {
-            TacAddr* start_label = new_label_addr();
-            TacAddr* end_label = new_label_addr();
-
-            emit(TAC_LABEL, start_label, NULL, NULL); // Label for loop start
-
-            // Condition
-            TacAddr* cond = gen_tac_for_expr(node->data.until_statement.condition);
-            // Create a temporary to hold the inverted condition
-            TacAddr* temp_not_cond = new_temp();
-            emit(TAC_EQ, temp_not_cond, cond, new_const(0)); // temp = (cond == 0)
-            emit(TAC_IFZ, end_label, temp_not_cond, NULL); // If temp is false (i.e., cond was true), jump to end
-
-            // Body
-            gen_tac_for_node(node->data.until_statement.body);
-            emit(TAC_GOTO, start_label, NULL, NULL); // Jump back to the start
-
-            // End label
-            emit(TAC_LABEL, end_label, NULL, NULL);
-            break;
-        }
-
-        case NODE_RETURN_STATEMENT: {
-            TacAddr* retval = NULL;
-            if (node->data.return_statement.expression) {
-                retval = gen_tac_for_expr(node->data.return_statement.expression);
-            }
-            emit(TAC_RETURN, NULL, retval, NULL);
-            break;
-        }
-
+        // NOTE: There are no cases for IF, FOR, WHILE, etc. here anymore!
+        // They are handled entirely by semantic.c.
         default:
+            // This function can be left empty or print a warning for unhandled simple nodes.
             break;
     }
 }
