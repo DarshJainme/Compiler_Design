@@ -7,7 +7,7 @@
 #include "parser.tab.h"
 #include "st.h"
 
-extern int semantic_errors;
+int semantic_errors=0;
 // static Type *current_function_return_type = NULL;
 
 // Forward Declarations for Traversal
@@ -737,6 +737,7 @@ void analyze_declaration(ASTNode *node)
         return;
     }
     
+    // can maybe replace with else.
     if (node->data.declaration.declarators)
     {
         for (ASTNodeList *d = node->data.declaration.declarators; d; d = d->next)
@@ -794,7 +795,29 @@ void analyze_declaration(ASTNode *node)
             else
             {
                 SymbolKind kind = (final_type->kind == TYPE_FUNCTION) ? SYM_FUNCTION : SYM_VARIABLE;
-                add_symbol(name, final_type, kind, init_decl->lineno);
+                Symbol* new_sym = add_symbol(name, final_type, kind, init_decl->lineno);
+
+                // ANNOTATE THE DECLARATOR'S IDENTIFIER NODE
+                // After adding the symbol, we need to find the actual identifier node
+                // in the declarator and attach the symbol to it for the TAC generator.
+                if (new_sym) {
+                    ASTNode* id_node = declarator;
+                    // Traverse down the declarator to find the base identifier node
+                    while (id_node && id_node->type != NODE_IDENTIFIER) {
+                        if (id_node->type == NODE_POINTER_DECLARATOR) {
+                            id_node = id_node->data.pointer_declarator.base_declarator;
+                        } else if (id_node->type == NODE_ARRAY_DECLARATOR) {
+                            id_node = id_node->data.array_declarator.base_declarator;
+                        } else if (id_node->type == NODE_FUNCTION_DECLARATOR) {
+                            id_node = id_node->data.function_declarator.base_declarator;
+                        } else {
+                            id_node = NULL; // Stop if we can't go further
+                        }
+                    }
+                    if (id_node && id_node->type == NODE_IDENTIFIER) {
+                        id_node->symbol = new_sym; // This is the missing annotation
+                    }
+                }
             }
             if (final_type->kind == TYPE_ARRAY && init_decl->data.init_declarator.initializer &&
                 init_decl->data.init_declarator.initializer->type == NODE_INITIALIZER_LIST)
