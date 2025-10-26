@@ -4,7 +4,7 @@
 #include "ast.h"
 #include "types.h"
 #include <stdbool.h>
-extern int semantic_errors;
+static int semantic_errors = 0;
 typedef struct Label {
     char* name;
     bool is_case_label; // To distinguish case labels from goto labels
