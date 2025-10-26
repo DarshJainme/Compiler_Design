@@ -543,17 +543,16 @@ void print_tac() {
              printf("\n");
         } else {
             printf("\t");
-            // Only print "res = " for ops that actually produce a result in 'res'
-            // Exclude jumps, labels, store, param, return (unless it has a value)
+            // Do not print a generic "res = " for ops that handle their own formatting
             if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ &&
                 instr->op != TAC_IFNZ && instr->op != TAC_STORE &&
                 instr->op != TAC_PARAM && instr->op != TAC_LABEL &&
-                !(instr->op == TAC_RETURN && !instr->res) && /* Don't print for return w/o value */
+                instr->op != TAC_RETURN && instr->op != TAC_CALL &&
                 instr->op != TAC_BEGIN_FUNC && instr->op != TAC_END_FUNC)
-            {
-                print_addr(instr->res);
-                printf(" = ");
-            }
+             {
+                 print_addr(instr->res);
+                 printf(" = ");
+             }
 
             switch (instr->op) {
                 // Assignment & Arithmetic
@@ -618,13 +617,13 @@ void print_tac() {
                    print_addr(instr->arg1); // The value to store
                    break;
                 case TAC_RETURN: 
-                    printf("return ");
                     if (instr->res) {
-                        // return can have an optional value
-                        printf(" ");
+                        printf("return ");
                         print_addr(instr->res);
+                    } else {
+                        printf("return");
                     }
-                    break;
+                     break;
                 case TAC_PARAM: printf("param "); print_addr(instr->arg1); break;
                 case TAC_CALL:
                     if (instr->res) { print_addr(instr->res); printf(" = "); }
