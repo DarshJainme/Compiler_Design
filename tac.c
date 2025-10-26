@@ -18,6 +18,41 @@ static int string_lit_count = 0; // Counter for unique string literal labels
 
 // --- Context for break/continue ---
 #define MAX_LOOP_SWITCH_DEPTH 20
+static TacAddr* continue_stack[MAX_LOOP_DEPTH];
+static TacAddr* break_stack[MAX_LOOP_DEPTH];
+static int loop_stack_ptr = -1;
+
+void push_loop_labels(TacAddr* continue_label, TacAddr* break_label) {
+    if (loop_stack_ptr < MAX_LOOP_DEPTH - 1) {
+        loop_stack_ptr++;
+        continue_stack[loop_stack_ptr] = continue_label;
+        break_stack[loop_stack_ptr] = break_label;
+    } else {
+        fprintf(stderr, "Fatal: Exceeded maximum loop nesting depth.\n");
+        exit(1);
+    }
+}
+
+void pop_loop_labels() {
+    if (loop_stack_ptr >= 0) {
+        loop_stack_ptr--;
+    }
+}
+
+TacAddr* get_loop_continue_label() {
+    if (loop_stack_ptr >= 0) {
+        return continue_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
+
+TacAddr* get_loop_break_label() {
+    if (loop_stack_ptr >= 0) {
+        return break_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
+
 typedef struct ControlFlowContext {
     TacAddr* break_label;
     TacAddr* continue_label; // Also used for switch default/fallthrough
@@ -213,6 +248,43 @@ int get_member_offset(Type* struct_type, const char* member_name) {
     return -1; // Member not found
 }
 
+
+// A simple stack to keep track of loop labels for break/continue
+#define MAX_LOOP_DEPTH 50
+static TacAddr* continue_stack[MAX_LOOP_DEPTH];
+static TacAddr* break_stack[MAX_LOOP_DEPTH];
+static int loop_stack_ptr = -1;
+
+void push_loop_labels(TacAddr* continue_label, TacAddr* break_label) {
+    if (loop_stack_ptr < MAX_LOOP_DEPTH - 1) {
+        loop_stack_ptr++;
+        continue_stack[loop_stack_ptr] = continue_label;
+        break_stack[loop_stack_ptr] = break_label;
+    } else {
+        fprintf(stderr, "Fatal: Exceeded maximum loop nesting depth.\n");
+        exit(1);
+    }
+}
+
+void pop_loop_labels() {
+    if (loop_stack_ptr >= 0) {
+        loop_stack_ptr--;
+    }
+}
+
+TacAddr* get_loop_continue_label() {
+    if (loop_stack_ptr >= 0) {
+        return continue_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
+
+TacAddr* get_loop_break_label() {
+    if (loop_stack_ptr >= 0) {
+        return break_stack[loop_stack_ptr];
+    }
+    return NULL;
+}
 
 /* --- Address Creation Helpers --- */
 
@@ -452,7 +524,8 @@ void print_tac() {
         }
          else {
             printf("\t");
-            if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ && instr->op != TAC_IFNZ && instr->op != TAC_PARAM && instr->op != TAC_STORE && instr->op != TAC_INDEX_WRITE) {
+            // Only print "res = " for non-jump/non-control instructions
+            if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ && instr->op != TAC_IFNZ && instr->op != TAC_RETURN && instr->op != TAC_PARAM) {
                 print_addr(instr->res);
                 printf(" = ");
             }
@@ -507,12 +580,20 @@ void print_tac() {
 
 
                 // Jumps & Labels
+                // Correction in printing jump instructions
                 case TAC_GOTO: printf("goto "); print_addr(instr->res); break;
                 case TAC_IFZ: printf("ifz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
                 case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
 
                 // Function Calls
-                case TAC_RETURN: printf("return "); if(instr->arg1) print_addr(instr->arg1); break;
+                case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
+                case TAC_RETURN: printf("return "); if(instr->arg1) 
+                    if (instr->res) {
+                        // return can have an optional value
+                        printf(" ");
+                        print_addr(instr->res);
+                    }
+                    break;
                 case TAC_PARAM: printf("param "); print_addr(instr->arg1); break;
                 case TAC_CALL:
                     if (instr->res) { print_addr(instr->res); printf(" = "); }
@@ -1161,6 +1242,8 @@ void gen_tac_for_condition(ASTNode* node, TacAddr* true_label, TacAddr* false_la
 
 // Generates TAC for statements and declarations.
 void gen_tac_for_node(ASTNode* node) {
+    // This function is now only called for simple cases that aren't
+    // control-flow statements. The complex logic is in semantic.c.
     if (!node) return;
 
     switch (node->type) {
@@ -1172,6 +1255,7 @@ void gen_tac_for_node(ASTNode* node) {
             break;
 
         case NODE_DECLARATION: {
+            // This handles declarations like `int x = 5;`
             if (!node->data.declaration.declarators) break;
             for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
                 ASTNode* init_decl = d_item->node;

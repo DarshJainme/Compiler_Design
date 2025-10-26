@@ -672,7 +672,7 @@ int main(int argc, char **argv) {
         if (analyze_ast(root)) {
             printf("--- Semantic Analysis Successful ---\n");
             printf("\n--- Final Symbol Table ---\n");
-            print_symbol_table(get_current_scope(), 0); // <-- ADD THIS
+            print_symbol_table(get_current_scope(), 0);
             printf("--- End of Symbol Table ---\n\n");
             // printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
             // if (root) print_ast(root, 0);

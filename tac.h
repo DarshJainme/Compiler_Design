@@ -159,6 +159,8 @@ void print_tac();
 TacAddr* handle_implicit_cast(TacAddr* src_addr, Type* target_type);
 
 /* --- TAC Generation from AST --- */
+
+// Main entry point to generate TAC from the AST
 void generate_tac(struct ASTNode* root);
 TacAddr* gen_tac_for_expr(struct ASTNode* node, bool lvalue_only);
 void gen_tac_for_node(struct ASTNode* node);
@@ -166,4 +168,9 @@ void gen_tac_for_declaration(struct ASTNode* node);
 void gen_tac_for_assignment(struct ASTNode* node);
 
 
+/* For different loops, stack management */
+void push_loop_labels(TacAddr* continue_label, TacAddr* break_label);
+void pop_loop_labels();
+TacAddr* get_loop_continue_label();
+TacAddr* get_loop_break_label();
 #endif // TAC_H
