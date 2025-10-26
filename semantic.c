@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "semantic.h"
 #include "symbol_table.h"
 #include "parser.tab.h"
@@ -386,50 +387,59 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
 // }
 
 // Helper to infer type from constant string
-Type *infer_constant_type(const char *val)
-{
+Type* infer_constant_type(const char* val) {
+    if (!val || val[0] == '\0') return create_type(TYPE_INT); // Default or error
+
     int len = strlen(val);
-    // Floating point: contains '.' or 'e' or 'E'
-    if (strchr(val, '.') || strchr(val, 'e') || strchr(val, 'E'))
-    {
-        // Float suffix
-        if (len > 1 && (val[len - 1] == 'f' || val[len - 1] == 'F'))
-        {
+
+    // Check for character literal ('c')
+    if (len >= 3 && val[0] == '\'' && val[len - 1] == '\'') {
+        return create_type(TYPE_CHAR);
+    }
+
+    // Check for floating point: contains '.', 'e', 'E', or ends with 'f'/'F'
+    bool has_decimal = strchr(val, '.') != NULL;
+    bool has_exponent = strchr(val, 'e') != NULL || strchr(val, 'E') != NULL;
+    bool has_f_suffix = (len > 1 && (val[len - 1] == 'f' || val[len - 1] == 'F'));
+
+    if (has_decimal || has_exponent || has_f_suffix) {
+        if (has_f_suffix) {
             return create_type(TYPE_FLOAT);
+        } else {
+            // Check for 'l'/'L' suffix for long double (treat as double for now)
+             if (len > 1 && (val[len - 1] == 'l' || val[len - 1] == 'L')) {
+                 return create_type(TYPE_DOUBLE); // Representing long double as double
+             }
+            return create_type(TYPE_DOUBLE); // Default float is double
         }
-        // Long double suffix (not implemented, treat as double)
-        if (len > 1 && (val[len - 1] == 'l' || val[len - 1] == 'L'))
-        {
-            return create_type(TYPE_DOUBLE);
+    }
+
+    // Integer types (handle suffixes: U, L, LL, UL, ULL, LU, LLU)
+    bool is_unsigned = false;
+    bool is_long = false;
+    // bool is_long_long = false; // Add if TYPE_LONG_LONG exists
+
+    int suffix_start = len;
+    while (suffix_start > 0 && (val[suffix_start - 1] == 'u' || val[suffix_start - 1] == 'U' || val[suffix_start - 1] == 'l' || val[suffix_start - 1] == 'L')) {
+        suffix_start--;
+    }
+
+    for (int i = suffix_start; i < len; ++i) {
+        if (val[i] == 'u' || val[i] == 'U') is_unsigned = true;
+        if (val[i] == 'l' || val[i] == 'L') {
+            // Check for LL
+            // if (is_long) is_long_long = true;
+            is_long = true;
         }
-        // Default: double
-        return create_type(TYPE_DOUBLE);
     }
-    // Integer suffixes
-    if (len > 2 && ((val[len - 2] == 'u' || val[len - 2] == 'U') && (val[len - 1] == 'l' || val[len - 1] == 'L')))
-    {
-        Type *t = create_type(TYPE_LONG);
-        t->is_unsigned = 1;
-        return t;
-    }
-    if (len > 2 && ((val[len - 2] == 'l' || val[len - 2] == 'L') && (val[len - 1] == 'u' || val[len - 1] == 'U')))
-    {
-        Type *t = create_type(TYPE_LONG);
-        t->is_unsigned = 1;
-        return t;
-    }
-    if (len > 1 && (val[len - 1] == 'l' || val[len - 1] == 'L'))
-    {
-        return create_type(TYPE_LONG);
-    }
-    if (len > 1 && (val[len - 1] == 'u' || val[len - 1] == 'U'))
-    {
-        Type *t = create_type(TYPE_INT);
-        t->is_unsigned = 1;
-        return t;
-    }
-    // Default: integer
-    return create_type(TYPE_INT);
+
+    Type* int_type;
+    // if (is_long_long) int_type = create_type(TYPE_LONG_LONG);
+    if (is_long) int_type = create_type(TYPE_LONG);
+    else int_type = create_type(TYPE_INT);
+
+    int_type->is_unsigned = is_unsigned;
+    return int_type;
 }
 
 // Recursively check array initializer
@@ -906,6 +916,7 @@ Type *analyze_expression(ASTNode *node)
                 semantic_errors++;
                 return create_type(TYPE_UNKNOWN);
             }
+            node->symbol = sym;
             return sym->type;
         }
 

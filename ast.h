@@ -93,11 +93,12 @@ typedef struct Member {
     struct Member *next;
 } Member;
 
+struct Symbol;
 // Main AST node structure
 typedef struct ASTNode {
     NodeType type;
     int lineno; // Line number for error reporting
-
+    struct Symbol* symbol;
     union {
         // Literals and identifiers
         char* stringValue; // For identifiers, constants, string literals

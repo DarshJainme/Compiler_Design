@@ -1,6 +1,6 @@
 // Simple statements
-
-int a1 = 5.5;
+int main(){
+    int a1 = 5.5;
 bool a2 = true;
 char a3 = 'c';
 float a4 = 5.5;
@@ -34,3 +34,5 @@ a1 = b1--;
 a1 = --b1;
 a1 = b1++;
 a1 = a1+++b1;
+return 0;
+}

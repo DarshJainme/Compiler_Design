@@ -26,6 +26,13 @@ void analyze_struct_or_union_specifier(struct ASTNode *node);
 struct Type *process_enum_specifier(struct ASTNode* node);
 struct Type *process_struct_or_union_specifier(struct ASTNode *node);
 
+// --- ADDED DECLARATIONS ---
+// Helper to get name from declarator (used in tac.c)
+char* get_name_from_declarator(struct ASTNode* declarator);
+// Helper to infer type from constant string (used in tac.c)
+struct Type* infer_constant_type(const char* val);
+// --- END ADDITIONS ---
+
 // The main entry point for semantic analysis. Returns 1 on success, 0 on error.
 int analyze_ast(ASTNode* root);
 

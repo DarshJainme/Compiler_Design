@@ -14,6 +14,7 @@ ASTNode* create_node(NodeType type) {
     }
     node->type = type;
     node->lineno = yylineno;
+    node->symbol = NULL;
     return node;
 }
 

@@ -27,13 +27,13 @@ ws          [ \t\r]+
 
     /* --- Numeric Constants --- */
     /* Order is important: float must come before integer */
-{digit}+\.{digit}+[fF]?          { yylval.str = strdup(yytext); return CONSTANT; }
-{digit}+([eE][+-]?{digit}+)      { yylval.str = strdup(yytext); return CONSTANT; }
-0[xX]({digit}|[a-fA-F])+         { yylval.str = strdup(yytext); return CONSTANT; }
-0[bB][01]+                      { yylval.str = strdup(yytext); return CONSTANT; }
-0[oO]?[0-7]+                    { yylval.str = strdup(yytext); return CONSTANT; }
-{digit}+                        { yylval.str = strdup(yytext); return CONSTANT; }
-
+{digit}+\.{digit}+([eE][+-]?{digit}+)?[fF]? { yylval.str = strdup(yytext); return CONSTANT;}
+{digit}+[eE][+-]?{digit}+[fF]?      { yylval.str = strdup(yytext); return CONSTANT;}
+0[xX]({digit}|[a-fA-F])+         { yylval.str = strdup(yytext); return CONSTANT;}
+0[bB][01]+                      { yylval.str = strdup(yytext); return CONSTANT;}
+0[oO]?[0-7]+                    { yylval.str = strdup(yytext); return CONSTANT;}
+{digit}+                        { yylval.str = strdup(yytext); return CONSTANT;}
+ 
     /* --- Keywords --- */
 "auto"                          { return AUTO; }
 "bool"                          { return BOOL; }
@@ -51,7 +51,7 @@ ws          [ \t\r]+
 "else"                          { return ELSE; }
 "enum"                          { return ENUM; }
 "extern"                        { return EXTERN; }
-"false"                         { return BOOL_FALSE; }
+"false"                         { yylval.str = strdup("0"); return CONSTANT; }
 "FILE"                          { return FILE_TYPE; }
 "final"                         { return FINAL; }
 "float"                         { return FLOAT; }
@@ -78,7 +78,7 @@ ws          [ \t\r]+
 "switch"                        { return SWITCH; }
 "throw"                         { return THROW; }
 "try"                           { return TRY; }
-"true"                          { return BOOL_TRUE; }
+"true"                          { yylval.str = strdup("1"); return CONSTANT; }
 "typedef"                       { return TYPEDEF; }
 "union"                         { return UNION; }
 "unsigned"                      { return UNSIGNED; }

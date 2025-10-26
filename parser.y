@@ -48,7 +48,7 @@ int is_typename(const char* name) {
 }
 
 /* --- Token Declarations --- */
-%token <str> IDENTIFIER CONSTANT STRING_LITERAL CHAR_LITERAL BOOL_TRUE BOOL_FALSE
+%token <str> IDENTIFIER CONSTANT STRING_LITERAL CHAR_LITERAL
 %token <str> TYPE_NAME
 %token SIZEOF PTR_OP INC_OP DEC_OP LSHIFT_OP RSHIFT_OP LE_OP GE_OP EQ_OP NE_OP
 %token LAND_OP LOR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
@@ -151,8 +151,6 @@ primary_expression
     | CONSTANT          { $$ = create_constant_node($1); }
     | STRING_LITERAL    { $$ = create_string_literal_node($1); }
     | CHAR_LITERAL      { $$ = create_constant_node($1); }
-    | BOOL_TRUE         { $$ = create_constant_node($1); }
-    | BOOL_FALSE        { $$ = create_constant_node($1); }
     | '(' expression ')'{ $$ = $2; }
     | lambda_expression { $$ = $1; }
     ;
@@ -679,9 +677,9 @@ int main(int argc, char **argv) {
             // printf("\n--- Printing Abstract Syntax Tree after semantic analysis phase ---\n");
             // if (root) print_ast(root, 0);
             
-            // printf("\n--- Generating Three-Address Code ---\n");
-            // generate_tac(root);
-            // print_tac();
+            printf("\n--- Generating Three-Address Code ---\n");
+            generate_tac(root);
+            print_tac();
             // print_symbol_table(current_scope, 0);
 
         } else {
