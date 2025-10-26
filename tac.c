@@ -15,6 +15,7 @@ StringLiteral* string_literal_list = NULL; // Initialize list head
 static int temp_count = 0;
 static int label_count = 0;
 static int string_lit_count = 0; // Counter for unique string literal labels
+int get_type_size(Type* type);
 
 // --- Context for break/continue ---
 #define MAX_LOOP_SWITCH_DEPTH 20
@@ -152,6 +153,60 @@ void find_all_labels_in_body(ASTNode* node) {
         default:
             break;
     }
+}
+
+TacAddr* calculate_array_offset(ASTNode* node, Type* current_type, TacAddr** out_element_type_addr) {
+    if (!node || node->type != NODE_ARRAY_SUBSCRIPT) {
+        // Base case: We've reached the innermost identifier or pointer
+        *out_element_type_addr = gen_tac_for_expr(node, false); // Get base address
+        return new_const_int(0); // Initial offset is 0
+    }
+
+    // Recursive step: Calculate offset for outer dimensions first
+    TacAddr* base_or_parent_addr = NULL; // Address from the level above
+    TacAddr* outer_offset = calculate_array_offset(node->data.array_subscript.array, current_type, &base_or_parent_addr);
+    if (!outer_offset || !base_or_parent_addr || !base_or_parent_addr->type) return NULL; // Error in recursion
+
+    Type* array_or_ptr_type = base_or_parent_addr->type;
+    Type* element_type = NULL;
+
+    if (array_or_ptr_type->kind == TYPE_ARRAY) {
+        element_type = array_or_ptr_type->data.base_info.base;
+         // --- NEED DIMENSION INFO HERE ---
+         // int num_cols = array_or_ptr_type->data.array_info.dimension; // Get next dimension size
+         // This requires storing dimensions in your Type struct during semantic analysis!
+         fprintf(stderr,"Warning line %d: Multidimensional array offset calculation requires dimension info in Type struct (assuming flat layout).\n", node->lineno);
+         // Without dimension info, we can only correctly handle pointers or 1D arrays
+         if (array_or_ptr_type->data.base_info.base->kind == TYPE_ARRAY) {
+              fprintf(stderr, "Error line %d: Cannot calculate offset for multi-D array without dimension sizes.\n", node->lineno);
+              return NULL;
+         }
+         // --- END DIMENSION REQUIREMENT ---
+
+    } else if (array_or_ptr_type->kind == TYPE_POINTER) {
+        element_type = array_or_ptr_type->data.base_info.base;
+    } else {
+        fprintf(stderr, "Error line %d: Subscript applied to non-array/non-pointer type '%s'.\n", node->lineno, type_to_string(array_or_ptr_type));
+        return NULL;
+    }
+
+    if (!element_type) return NULL;
+    int element_size = get_type_size(element_type);
+    if (element_size <= 0) { /* Error or Warning */ element_size = 1; }
+
+    // Calculate offset for the current index
+    TacAddr* index_val = gen_tac_for_expr(node->data.array_subscript.index, false);
+    if (!index_val) return NULL;
+
+    TacAddr* current_offset = new_temp(create_type(TYPE_INT));
+    emit(TAC_MUL, current_offset, index_val, new_const_int(element_size));
+
+    // Add outer offset to current offset
+    TacAddr* total_offset = new_temp(create_type(TYPE_INT));
+    emit(TAC_ADD, total_offset, outer_offset, current_offset);
+
+    *out_element_type_addr = base_or_parent_addr; // Pass base address up
+    return total_offset;
 }
 
 /* --- Type Size Helper (Simplified) --- */
@@ -488,8 +543,14 @@ void print_tac() {
              printf("\n");
         } else {
             printf("\t");
-            // Only print "res = " for non-jump/non-control instructions
-            if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ && instr->op != TAC_IFNZ && instr->op != TAC_RETURN && instr->op != TAC_PARAM) {
+            // Only print "res = " for ops that actually produce a result in 'res'
+            // Exclude jumps, labels, store, param, return (unless it has a value)
+            if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ &&
+                instr->op != TAC_IFNZ && instr->op != TAC_STORE &&
+                instr->op != TAC_PARAM && instr->op != TAC_LABEL &&
+                !(instr->op == TAC_RETURN && !instr->res) && /* Don't print for return w/o value */
+                instr->op != TAC_BEGIN_FUNC && instr->op != TAC_END_FUNC)
+            {
                 print_addr(instr->res);
                 printf(" = ");
             }
@@ -550,6 +611,12 @@ void print_tac() {
                 case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
 
                 // Function Calls
+                case TAC_STORE:
+                   printf("*"); // Indicate pointer dereference for store
+                   print_addr(instr->res); // The address to store into
+                   printf(" = ");
+                   print_addr(instr->arg1); // The value to store
+                   break;
                 case TAC_RETURN: 
                     printf("return ");
                     if (instr->res) {
@@ -568,7 +635,6 @@ void print_tac() {
                  // Memory, Pointers, Addresses
                  case TAC_ADDR: printf("&"); print_addr(instr->arg1); break;
                  case TAC_DEREF: printf("*"); print_addr(instr->arg1); break;
-                 case TAC_STORE: printf("*"); print_addr(instr->res); printf(" = "); print_addr(instr->arg1); break;
                  case TAC_LEA: print_addr(instr->arg1); printf(" + "); print_addr(instr->arg2); break; // Or specific LEA format
 
                  // Array/Member Access (Simplified)
@@ -588,6 +654,62 @@ void gen_tac_for_node(ASTNode* node);
 TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue);
 void gen_tac_for_condition(ASTNode* node, TacAddr* true_label, TacAddr* false_label);
 TacAddr* emit_conversion(TacAddr* source_addr, Type* target_type);
+
+void gen_tac_for_initializer_list(TacAddr* base_addr, Type* base_type, ASTNode* initializer) {
+    if (!initializer || initializer->type != NODE_INITIALIZER_LIST) {
+        fprintf(stderr, "Error: Expected initializer list.\n"); // Should ideally have lineno
+        return;
+    }
+    if (!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_STRUCT)) {
+         fprintf(stderr, "Error: Initializer list target is not array or struct.\n");
+         return;
+    }
+
+    int index = 0;
+    Type* elem_type = NULL;
+    int elem_size = 0;
+
+    if (base_type->kind == TYPE_ARRAY) {
+        elem_type = base_type->data.base_info.base;
+        elem_size = get_type_size(elem_type);
+         if (elem_size <= 0) {
+             fprintf(stderr, "Warning: Cannot determine element size for array initializer.\n");
+             elem_size = 1; // Failsafe, likely wrong
+         }
+    } else { // Struct
+        // We'd need to iterate through struct members simultaneously
+        fprintf(stderr, "Warning: TAC generation for struct initializers not fully implemented.\n");
+        return; // Simplification: Skip struct initializers for now
+    }
+
+
+    for (ASTNodeList* item = initializer->data.items_list; item; item = item->next, index++) {
+        TacAddr* current_elem_addr = base_addr; // Start with base for offset calculation
+
+        if (base_type->kind == TYPE_ARRAY) {
+            // Calculate address: base_addr + (index * elem_size)
+            TacAddr* offset = new_temp(create_type(TYPE_INT));
+            emit(TAC_MUL, offset, new_const_int(index), new_const_int(elem_size));
+
+            current_elem_addr = new_temp(create_pointer_type(elem_type));
+            emit(TAC_ADD, current_elem_addr, base_addr, offset);
+        }
+        // else { // Struct - calculate offset based on member 'index' }
+
+        if (item->node->type == NODE_INITIALIZER_LIST) {
+            // Recursive call for nested lists (e.g., multidimensional arrays)
+            gen_tac_for_initializer_list(current_elem_addr, elem_type, item->node);
+        } else {
+            // Generate value for the current element
+            TacAddr* rvalue = gen_tac_for_expr(item->node, false);
+            if (!rvalue) continue;
+            rvalue = emit_conversion(rvalue, elem_type);
+
+            // Store value
+            emit(TAC_STORE, current_elem_addr, rvalue, NULL); // *current_elem_addr = rvalue
+        }
+    }
+}
 
 /* --- TAC Generation from AST --- */
 
@@ -750,15 +872,34 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 
                 // Handle string concatenation
                 if (node->data.binary_expr.op == '+') {
-                    bool left_is_str = (left_type->kind == TYPE_STRING) || (left_type->kind == TYPE_POINTER && left_type->data.base_info.base->kind == TYPE_CHAR);
-                    bool right_is_str = (right_type->kind == TYPE_STRING) || (right_type->kind == TYPE_POINTER && right_type->data.base_info.base->kind == TYPE_CHAR);
+                    // Check if either operand is string or char*
+                    bool left_is_str = (left_type && (left_type->kind == TYPE_STRING || (left_type->kind == TYPE_POINTER && left_type->data.base_info.base->kind == TYPE_CHAR)));
+                    bool right_is_str = (right_type && (right_type->kind == TYPE_STRING || (right_type->kind == TYPE_POINTER && right_type->data.base_info.base->kind == TYPE_CHAR)));
+
                     if (left_is_str || right_is_str) {
-                        // This requires a runtime call (e.g., `strcat`)
-                        // This is a simplification, assumes a `concat` function
-                        TacAddr* result = new_temp(create_type(TYPE_STRING));
-                        emit(TAC_CALL, result, new_var_addr(find_symbol("strcat_runtime")), NULL); // Placeholder
+                        // We need runtime support for this. Emit calls to a helper.
+                        // Example: result = _string_concat(left, right);
+                        // Ensure left and right are converted to string pointers if needed.
+
+                        fprintf(stderr, "Warning line %d: String concatenation TAC requires runtime support (emitting placeholder).\n", node->lineno);
+
+                        // Placeholder: Assume a function _string_concat exists
+                        Symbol* concat_sym = find_symbol("_string_concat"); // Need to predefine this or handle lookup failure
+                        if (!concat_sym) {
+                            // Create a dummy symbol if needed for TAC
+                            concat_sym = calloc(1, sizeof(Symbol));
+                            concat_sym->name = "_string_concat"; // Runtime function name
+                            // Define its type if possible (e.g., function returning string ptr)
+                        }
+
+                        TacAddr* result = new_temp(create_type(TYPE_STRING)); // Assuming result is string
+                        // Emit params (reverse order)
+                        emit(TAC_PARAM, NULL, right, NULL); // TODO: Convert right to string if needed
+                        emit(TAC_PARAM, NULL, left, NULL);  // TODO: Convert left to string if needed
+                        emit(TAC_CALL, result, new_var_addr(concat_sym), new_const_int(2));
                         return result;
                     }
+                    // If not string concat, fall through to arithmetic...
                 }
 
                 Type* result_type = get_common_arithmetic_type(left_type, right_type); // Gives float/double if either is float/double
@@ -890,6 +1031,8 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 if (base_op == TAC_UNDEF) { /* Error or warning */ }
             }
 
+            TacAddr* final_rvalue; // --- Store the final value to return ---
+
             if (is_compound && base_op != TAC_UNDEF) {
                 // Expand: L = L op R
                 // 1. Load current value of L
@@ -902,12 +1045,17 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
 
                 // 3. Store result back
                 emit(TAC_STORE, lvalue_addr, result_val, NULL); // *(addr_L) = result
-                return result_val; // Assignment evaluates to the new value
+
+                final_rvalue = result_val; // --- The new value is the result ---
             } else {
                  // Simple assignment: L = R
                  emit(TAC_STORE, lvalue_addr, rvalue, NULL); // *(addr_L) = rvalue
-                 return rvalue; // Assignment evaluates to the assigned value
+                 final_rvalue = rvalue; // --- The assigned value is the result ---
             }
+            // --- MODIFICATION: Return the final R-value ---
+            // The value of an assignment expression is the value that was assigned.
+            return final_rvalue;
+            // --- END MODIFICATION ---
         }
 
         case NODE_FUNC_CALL: { // Cannot be lvalue
@@ -990,32 +1138,40 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
              return result;
          }
 
-        case NODE_ARRAY_SUBSCRIPT: { // Can be lvalue or rvalue
-            TacAddr* base_addr = gen_tac_for_expr(node->data.array_subscript.array, false); // Get base address (array name or pointer value)
-            TacAddr* index_val = gen_tac_for_expr(node->data.array_subscript.index, false); // Get index value
-            if (!base_addr || !index_val) return NULL;
+        case NODE_ARRAY_SUBSCRIPT: {
+            TacAddr* base_addr = NULL;
+            // Recursively calculate the total byte offset and get the original base address
+            TacAddr* total_offset = calculate_array_offset(node, NULL /* Initial type unused */, &base_addr);
 
-            Type* element_type = NULL;
-            if (base_addr->type && (base_addr->type->kind == TYPE_ARRAY || base_addr->type->kind == TYPE_POINTER)) {
-                 element_type = base_addr->type->data.base_info.base;
-            } else {
-                 fprintf(stderr, "Error line %d: Base of array subscript is not an array or pointer.\n", node->lineno);
-                 return NULL;
-            }
+            if (!total_offset || !base_addr || !base_addr->type) return NULL; // Error occurred
 
-            int element_size = get_type_size(element_type);
-            TacAddr* size_addr = new_const_int(element_size);
-            TacAddr* offset = new_temp(create_type(TYPE_INT)); // Offset is usually int/long
+            Type* final_element_type = base_addr->type;
+             // calculate_array_offset effectively peels off layers, so the type of base_addr
+             // needs to be adjusted based on the number of subscripts peeled.
+             // For now, let's assume calculate_array_offset correctly gives us the base
+             // and the effective final element type needs deducing.
+             ASTNode* temp_node = node;
+             while(temp_node && temp_node->type == NODE_ARRAY_SUBSCRIPT) {
+                 if (final_element_type && (final_element_type->kind == TYPE_ARRAY || final_element_type->kind == TYPE_POINTER)) {
+                     final_element_type = final_element_type->data.base_info.base;
+                 } else {
+                     fprintf(stderr, "Error line %d: Too many subscripts applied.\n", node->lineno);
+                     return NULL;
+                 }
+                 temp_node = temp_node->data.array_subscript.array;
+             }
+             if (!final_element_type) return NULL; // Should have element type
 
-            emit(TAC_MUL, offset, index_val, size_addr); // offset = index * size
 
-            TacAddr* element_addr = new_temp(create_pointer_type(element_type)); // Address calculation
-            emit(TAC_ADD, element_addr, base_addr, offset); // element_addr = base_addr + offset (Using ADD for LEA)
+            // Calculate the final address: base_addr + total_offset
+            TacAddr* element_addr = new_temp(create_pointer_type(final_element_type));
+            emit(TAC_ADD, element_addr, base_addr, total_offset); // element_addr = base_addr + total_offset
 
             if (is_lvalue) {
-                return element_addr;
+                return element_addr; // Return the calculated address
             } else {
-                TacAddr* result = new_temp(element_type);
+                // Dereference the final address to get the value
+                TacAddr* result = new_temp(final_element_type);
                 emit(TAC_DEREF, result, element_addr, NULL); // result = *element_addr
                 return result;
             }
@@ -1224,41 +1380,16 @@ void gen_tac_for_node(ASTNode* node) {
                     if (!target_type) continue;
 
                     if (initializer->type == NODE_INITIALIZER_LIST) {
-                        // Handle array initializer list: e.g., `int arr[] = {1, 2, 3};`
-                        Type* elem_type = NULL;
-                        if (target_type->kind == TYPE_ARRAY) {
-                            elem_type = target_type->data.base_info.base;
-                        } else {
-                            fprintf(stderr, "Error line %d: Initializer list used on non-array type '%s'.\n", initializer->lineno, id_node->data.stringValue);
-                            continue;
-                        }
-
-                        int elem_size = get_type_size(elem_type);
-                        int index = 0;
-                        for (ASTNodeList* item = initializer->data.items_list; item; item = item->next, index++) {
-                            // a. Get value of the item (e.g., `1`)
-                            TacAddr* rvalue = gen_tac_for_expr(item->node, false);
-                            if (!rvalue) continue;
-                            rvalue = emit_conversion(rvalue, elem_type);
-
-                            // b. Calculate address: `&arr + (index * elem_size)`
-                            TacAddr* offset = new_temp(create_type(TYPE_INT));
-                            emit(TAC_MUL, offset, new_const_int(index), new_const_int(elem_size));
-                            
-                            TacAddr* elem_addr = new_temp(create_pointer_type(elem_type));
-                            // `lvalue_addr` is the base address of the array
-                            emit(TAC_ADD, elem_addr, lvalue_addr, offset); 
-                            
-                            // c. Store value
-                            emit(TAC_STORE, elem_addr, rvalue, NULL); // `*(elem_addr) = rvalue`
-                        }
+                         // --- FIX FOR NESTED INITIALIZERS ---
+                        gen_tac_for_initializer_list(lvalue_addr, target_type, initializer);
+                         // --- END FIX ---
                     } else {
-                        // Handle simple initializer: e.g., `int a = 5;` or `int *ptr = &a;`
                         TacAddr* rvalue = gen_tac_for_expr(initializer, false);
                         if (!rvalue) continue;
-
                         rvalue = emit_conversion(rvalue, target_type);
-                        emit(TAC_STORE, lvalue_addr, rvalue, NULL); // `*(&a) = 5`
+                        // --- Use res=address, arg1=value for STORE ---
+                        emit(TAC_STORE, lvalue_addr, rvalue, NULL);
+                        // --- END FIX ---
                     }
                 }
             }
@@ -1429,12 +1560,17 @@ void gen_tac_for_node(ASTNode* node) {
         case NODE_RETURN_STATEMENT: {
             TacAddr* retval = NULL;
             if (node->data.return_statement.expression) {
+                // --- FIX: Ensure expression is generated ---
                 retval = gen_tac_for_expr(node->data.return_statement.expression, false);
-                 if (!retval) { /* Error */ }
-                 // Note: The semantic analyzer should have already inserted a cast
-                 // if the return type doesn't match the function's return type.
+                // The semantic analyzer should ensure type compatibility/insert casts
+                 if (!retval) {
+                     fprintf(stderr, "Error line %d: Failed to generate TAC for return expression.\n", node->lineno);
+                     // Optionally emit return without value or handle error
+                 }
+                // --- END FIX ---
             }
-            emit(TAC_RETURN, retval, NULL, NULL); // FIX: Store return value in `res`
+            // Store return value (or NULL) in `res` field
+            emit(TAC_RETURN, retval, NULL, NULL);
             break;
         }
 

@@ -20,6 +20,31 @@ void analyze_function_definition(ASTNode *node);
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
 char* get_name_from_declarator(ASTNode* declarator);
 
+ASTNode* find_identifier_in_declarator(ASTNode* declarator) {
+    ASTNode* current = declarator;
+    while (current) {
+        switch (current->type) {
+            case NODE_IDENTIFIER:
+                return current; // Found it
+            case NODE_POINTER_DECLARATOR:
+                current = current->data.pointer_declarator.base_declarator;
+                break;
+            case NODE_ARRAY_DECLARATOR:
+                current = current->data.array_declarator.base_declarator;
+                break;
+            case NODE_FUNCTION_DECLARATOR: // Should not happen *within* a param declarator usually
+                current = current->data.function_declarator.base_declarator;
+                break;
+             case NODE_REFERENCE_DECLARATOR:
+                 current = current->data.reference_declarator.base_declarator;
+                 break;
+            default:
+                return NULL; // Not found or unknown type
+        }
+    }
+    return NULL;
+}
+
 void analyze_enum_specifier(ASTNode *node) {
     if (!node || node->type != NODE_ENUM_SPECIFIER) return;
 
@@ -643,45 +668,54 @@ void analyze_class_specifier(ASTNode *node) {
 // Add all function parameters to the current scope
 void add_function_parameters(ASTNode *declarator)
 {
-    if (!declarator)
-        return;
+    if (!declarator) return;
     ASTNode *current = declarator;
     // Find the function declarator node
-    while (current)
-    {
-        if (current->type == NODE_FUNCTION_DECLARATOR)
-        {
-            // For each parameter, add to symbol table
+    while (current) {
+        if (current->type == NODE_FUNCTION_DECLARATOR) {
             ASTNodeList *params = current->data.function_declarator.parameters;
-            for (ASTNodeList *p = params; p; p = p->next)
-            {
-                ASTNode *param_decl = p->node;
-                if (!param_decl)
-                    continue;
-                Type *param_type = get_type_from_specifiers(param_decl->data.parameter_declaration.specifiers);
-                if (param_decl->data.parameter_declaration.declarator)
-                {
-                    param_type = build_type_from_declarator(param_type, param_decl->data.parameter_declaration.declarator);
-                    const char *pname = get_name_from_declarator(param_decl->data.parameter_declaration.declarator);
-                    if (pname)
-                    {
-                        add_symbol(pname, param_type, SYM_VARIABLE, param_decl->lineno);
+            for (ASTNodeList *p = params; p; p = p->next) {
+                ASTNode *param_decl_node = p->node; // Renamed to avoid confusion
+                if (!param_decl_node || param_decl_node->type != NODE_PARAMETER_DECLARATION) continue; // Safety check
+
+                Type *param_type = get_type_from_specifiers(param_decl_node->data.parameter_declaration.specifiers);
+                ASTNode* param_declarator = param_decl_node->data.parameter_declaration.declarator;
+
+                if (param_declarator) {
+                    param_type = build_type_from_declarator(param_type, param_declarator);
+                    const char *pname = get_name_from_declarator(param_declarator);
+                    if (pname) {
+                        Symbol* sym = add_symbol(pname, param_type, SYM_VARIABLE, param_decl_node->lineno);
+
+                        // --- FIX: Annotate the parameter's identifier node ---
+                        if (sym) {
+                            ASTNode* id_node = find_identifier_in_declarator(param_declarator);
+                            if (id_node) {
+                                id_node->symbol = sym; // Attach symbol info
+                            } else {
+                                fprintf(stderr, "Warning line %d: Could not find identifier node for parameter '%s' to annotate.\n", param_decl_node->lineno, pname);
+                            }
+                        }
+                        // --- END FIX ---
                     }
+                     else {
+                         // Abstract declarator (e.g., `int func(int *)`) - no name to add/annotate
+                         free(param_type); // Free the built type if not used
+                     }
+                } else {
+                     // No declarator (e.g., `int func(int)`) - add symbol without name? Or ignore?
+                     // C allows unnamed parameters. For symbol table, we might skip or give a placeholder.
+                     // For TAC, it's not directly addressable by name.
+                     free(param_type); // Free the base type if not used
                 }
             }
-            break;
+            break; // Found the function declarator, processed params
         }
-        else if (current->type == NODE_POINTER_DECLARATOR)
-        {
+        // Traverse down if nested (e.g., pointer to function)
+        else if (current->type == NODE_POINTER_DECLARATOR) {
             current = current->data.pointer_declarator.base_declarator;
-        }
-        else if (current->type == NODE_ARRAY_DECLARATOR)
-        {
-            current = current->data.array_declarator.base_declarator;
-        }
-        else
-        {
-            break;
+        } else {
+            break; // Stop if not a function or pointer declarator
         }
     }
 }
