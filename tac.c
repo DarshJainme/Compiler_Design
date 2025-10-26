@@ -18,41 +18,6 @@ static int string_lit_count = 0; // Counter for unique string literal labels
 
 // --- Context for break/continue ---
 #define MAX_LOOP_SWITCH_DEPTH 20
-static TacAddr* continue_stack[MAX_LOOP_DEPTH];
-static TacAddr* break_stack[MAX_LOOP_DEPTH];
-static int loop_stack_ptr = -1;
-
-void push_loop_labels(TacAddr* continue_label, TacAddr* break_label) {
-    if (loop_stack_ptr < MAX_LOOP_DEPTH - 1) {
-        loop_stack_ptr++;
-        continue_stack[loop_stack_ptr] = continue_label;
-        break_stack[loop_stack_ptr] = break_label;
-    } else {
-        fprintf(stderr, "Fatal: Exceeded maximum loop nesting depth.\n");
-        exit(1);
-    }
-}
-
-void pop_loop_labels() {
-    if (loop_stack_ptr >= 0) {
-        loop_stack_ptr--;
-    }
-}
-
-TacAddr* get_loop_continue_label() {
-    if (loop_stack_ptr >= 0) {
-        return continue_stack[loop_stack_ptr];
-    }
-    return NULL;
-}
-
-TacAddr* get_loop_break_label() {
-    if (loop_stack_ptr >= 0) {
-        return break_stack[loop_stack_ptr];
-    }
-    return NULL;
-}
-
 typedef struct ControlFlowContext {
     TacAddr* break_label;
     TacAddr* continue_label; // Also used for switch default/fallthrough
@@ -586,7 +551,6 @@ void print_tac() {
                 case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
 
                 // Function Calls
-                case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
                 case TAC_RETURN: printf("return "); if(instr->arg1) 
                     if (instr->res) {
                         // return can have an optional value

@@ -6,7 +6,6 @@
 #include "symbol_table.h"
 #include "parser.tab.h"
 #include "st.h"
-#include "tac.h"
 
 extern int semantic_errors;
 // static Type *current_function_return_type = NULL;
@@ -20,7 +19,6 @@ void analyze_class_specifier(ASTNode *node);
 void analyze_function_definition(ASTNode *node);
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
 char* get_name_from_declarator(ASTNode* declarator);
-void analyze_and_gen_tac_for_loop(ASTNode* node, FunctionAnalysisContext* context);
 
 void analyze_enum_specifier(ASTNode *node) {
     if (!node || node->type != NODE_ENUM_SPECIFIER) return;
@@ -151,7 +149,6 @@ void collect_labels(ASTNode* node, FunctionAnalysisContext* context) {
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context) {
     if (!node) return;
 
-    // We will generate TAC for statements here
     switch (node->type) {
         case NODE_COMPOUND_STATEMENT:
             enter_scope();
@@ -165,35 +162,100 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
         case NODE_EXPRESSION_STATEMENT:
             if (node->data.expression_statement.expression) {
                 analyze_expression(node->data.expression_statement.expression);
-                gen_tac_for_expr(node->data.expression_statement.expression);
             }
             break;
 
         case NODE_IF_STATEMENT: {
             Type *cond_type = analyze_expression(node->data.if_statement.condition);
             if (cond_type && !is_scalar_type(cond_type)) { /* error */ }
-            // Generate TAC for the whole structure AFTER analyzing its parts.
-            // This allows tac.c to handle labels and jumps correctly.
-            TacAddr* else_label = new_label_addr();
-            TacAddr* end_label = new_label_addr();
-            TacAddr* cond_addr = gen_tac_for_expr(node->data.if_statement.condition);
-            emit(TAC_IFZ, else_label, cond_addr, NULL);
-            // Analyze and generate TAC for the 'if' body
             analyze_statement_with_context(node->data.if_statement.if_body, context);
-            emit(TAC_GOTO, end_label, NULL, NULL);
-            emit(TAC_LABEL, else_label, NULL, NULL);
             if (node->data.if_statement.else_body) {
                 analyze_statement_with_context(node->data.if_statement.else_body, context);
             }
-            emit(TAC_LABEL, end_label, NULL, NULL);
             break;
         }
         case NODE_WHILE_STATEMENT:
         case NODE_UNTIL_STATEMENT:
-        case NODE_DO_WHILE_STATEMENT:
-        case NODE_FOR_STATEMENT:  {
-            // Let a dedicated function handle the complex logic for all loops
-            analyze_and_gen_tac_for_loop(node, context);
+        case NODE_DO_WHILE_STATEMENT: {
+            bool was_in_loop = context->in_loop; // Save previous state
+            context->in_loop = true;
+
+            Type *cond_type = NULL;
+            if (node->type == NODE_WHILE_STATEMENT)
+            {
+                cond_type = analyze_expression(node->data.while_statement.condition);
+                analyze_statement_with_context(node->data.while_statement.body, context);
+            }
+            else if (node->type == NODE_UNTIL_STATEMENT)
+            {
+                cond_type = analyze_expression(node->data.until_statement.condition);
+                analyze_statement_with_context(node->data.until_statement.body, context);
+            }
+            else // NODE_DO_WHILE_STATEMENT
+            {
+                analyze_statement_with_context(node->data.do_while_statement.body, context);
+                cond_type = analyze_expression(node->data.do_while_statement.condition);
+            }
+
+            if (cond_type && !is_scalar_type(cond_type))
+            {
+                fprintf(stderr, "Semantic Error (Line %d): Condition of statement must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+                semantic_errors++;
+            }
+
+            context->in_loop = was_in_loop; // Restore previous state
+            break;
+        }
+        case NODE_FOR_STATEMENT: {
+            bool was_in_loop = context->in_loop;
+            context->in_loop = true;
+            enter_scope(); // Scope for the loop variable and body
+            // 1. Analyze the INIT part
+            if (node->data.for_statement.init)
+            {
+                if (node->data.for_statement.init->type == NODE_DECLARATION)
+                {
+                    // If it's a declaration, analyze it as such
+                    analyze_declaration(node->data.for_statement.init);
+                }
+                else
+                {
+                    // If it's an expression statement, unwrap and analyze the expression
+                    ASTNode *init_expr = node->data.for_statement.init->data.expression_statement.expression;
+                    if (init_expr)
+                    {
+                        analyze_expression(init_expr);
+                    }
+                }
+            }
+
+            // 2. Analyze the CONDITION part
+            if (node->data.for_statement.condition)
+            {
+                // Unwrap the expression from the expression statement
+                ASTNode *cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
+                if (cond_expr)
+                {
+                    Type *cond_type = analyze_expression(cond_expr);
+                    if (cond_type && !is_scalar_type(cond_type))
+                    {
+                        fprintf(stderr, "Semantic Error (Line %d): Condition of for-loop must be a scalar type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
+                        semantic_errors++;
+                    }
+                }
+            }
+
+            // 3. Analyze the INCREMENT part
+            if (node->data.for_statement.increment)
+            {
+                // The increment part is a raw expression, so no unwrapping is needed here
+                analyze_expression(node->data.for_statement.increment);
+            }
+
+            // 4. Analyze the BODY
+            analyze_statement_with_context(node->data.for_statement.body, context); // Use the context-aware version
+            leave_scope();
+            context->in_loop = was_in_loop;
             break;
         }
 
@@ -203,19 +265,9 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
                 fprintf(stderr, "Semantic Error (Line %d): Condition of switch statement must be an integer type, but got '%s'.\n", node->lineno, type_to_string(cond_type));
                 semantic_errors++;
             }
-
-            // Integrate TAC for switch (simplified version)
-            TacAddr* end_label = new_label_addr();
-            push_loop_labels(NULL, end_label); 
-            // Use loop stack for 'break'
             context->in_switch = true;
-            // We generate TAC for the expression, jumps are handled inside case statements
-            gen_tac_for_expr(node->data.switch_statement.expression);
             analyze_statement_with_context(node->data.switch_statement.body, context);
             context->in_switch = false;
-
-            emit(TAC_LABEL, end_label, NULL, NULL);
-            pop_loop_labels();
             break;
         }
 
@@ -260,16 +312,12 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
                 fprintf(stderr, "Semantic Error (Line %d): 'continue' statement not in a loop.\n", node->lineno);
                 semantic_errors++;
             }
-            // Generate GOTO for break
-            emit(TAC_GOTO, get_loop_continue_label(), NULL, NULL);
             break;
         case NODE_BREAK_STATEMENT:
             if (!context->in_loop && !context->in_switch) {
                 fprintf(stderr, "Semantic Error (Line %d): 'break' statement not in a loop or switch.\n", node->lineno);
                 semantic_errors++;
             }
-            // Generate GOTO for continue
-            emit(TAC_GOTO, get_loop_break_label(), NULL, NULL);
             break;
         case NODE_RETURN_STATEMENT: {
             if (!context || !context->return_type)
@@ -292,21 +340,12 @@ void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* cont
                         create_typename_node(type_to_string(context->return_type)),
                         node->data.return_statement.expression);
                 }
-                // Generate TAC for return
-                if (node->data.return_statement.expression) {
-                    TacAddr* retval = gen_tac_for_expr(node->data.return_statement.expression);
-                    emit(TAC_RETURN, retval, NULL, NULL);
-                } else {
-                    emit(TAC_RETURN, NULL, NULL, NULL);
-                }
             }
             break;
         }
         
         default:
-        // Fallback for simple statements not explicitly handled
-            gen_tac_for_node(node);
-            break;
+             break;
     }
 }
 
@@ -647,66 +686,6 @@ void add_function_parameters(ASTNode *declarator)
     }
 }
 
-// Added a new helper function to handle the different loops
-void analyze_and_gen_tac_for_loop(ASTNode* node, FunctionAnalysisContext* context) {
-    bool was_in_loop = context->in_loop;
-    context->in_loop = true;
-
-    TacAddr* start_label = new_label_addr();
-    TacAddr* increment_label = (node->type == NODE_FOR_STATEMENT) ? new_label_addr() : start_label;
-    TacAddr* end_label = new_label_addr();
-
-    push_loop_labels(increment_label, end_label);
-
-    if (node->type == NODE_FOR_STATEMENT) {
-        enter_scope();
-        // 1. Init
-        if (node->data.for_statement.init) {
-            analyze_node(node->data.for_statement.init, context); // This will also gen TAC
-        }
-        emit(TAC_LABEL, start_label, NULL, NULL);
-        // 2. Condition
-        if (node->data.for_statement.condition) {
-            ASTNode* cond_expr = node->data.for_statement.condition->data.expression_statement.expression;
-            analyze_expression(cond_expr);
-            TacAddr* cond_addr = gen_tac_for_expr(cond_expr);
-            emit(TAC_IFZ, end_label, cond_addr, NULL);
-        }
-        // 3. Body
-        analyze_statement_with_context(node->data.for_statement.body, context);
-        // 4. Increment
-        emit(TAC_LABEL, increment_label, NULL, NULL);
-        if (node->data.for_statement.increment) {
-            analyze_expression(node->data.for_statement.increment);
-            gen_tac_for_expr(node->data.for_statement.increment);
-        }
-        emit(TAC_GOTO, start_label, NULL, NULL);
-        leave_scope();
-    } else if (node->type == NODE_WHILE_STATEMENT) {
-        emit(TAC_LABEL, start_label, NULL, NULL);
-        // Condition
-        analyze_expression(node->data.while_statement.condition);
-        TacAddr* cond_addr = gen_tac_for_expr(node->data.while_statement.condition);
-        emit(TAC_IFZ, end_label, cond_addr, NULL);
-        // Body
-        analyze_statement_with_context(node->data.while_statement.body, context);
-        emit(TAC_GOTO, start_label, NULL, NULL);
-    } else if (node->type == NODE_DO_WHILE_STATEMENT) {
-        emit(TAC_LABEL, start_label, NULL, NULL);
-        // Body
-        analyze_statement_with_context(node->data.do_while_statement.body, context);
-        // Condition
-        analyze_expression(node->data.do_while_statement.condition);
-        TacAddr* cond_addr = gen_tac_for_expr(node->data.do_while_statement.condition);
-        emit(TAC_IFNZ, start_label, cond_addr, NULL); // Note: IFNZ for do-while
-    }
-    // TODO: Handle until
-
-    emit(TAC_LABEL, end_label, NULL, NULL);
-    pop_loop_labels();
-    context->in_loop = was_in_loop;
-}
-
 void analyze_declaration(ASTNode *node)
 {
     if (!node || node->type != NODE_DECLARATION) return;
@@ -847,9 +826,6 @@ void analyze_declaration(ASTNode *node)
             }
         }
     }
-    // After the entire declaration statement is analyzed and symbols are added,
-    // generate TAC for it. This will handle any initializers.
-    gen_tac_for_node(node);
     free(base_type);
 }
 
@@ -897,17 +873,11 @@ void analyze_function_definition(ASTNode *node)
     // 1. First Pass: Collect all labels (goto, case, default)
     collect_labels(node->data.function_definition.body, &context);
     
-    // Emit TAC for function start
-    emit(TAC_BEGIN_FUNC, NULL, NULL, NULL);
-    
     // 2. Second Pass: Full statement analysis
     enter_scope();
     add_function_parameters(node->data.function_definition.declarator);
     analyze_statement_with_context(node->data.function_definition.body, &context);
     leave_scope();
-
-    // Emit TAC for function end
-    emit(TAC_END_FUNC, NULL, NULL, NULL);
 
     // Free the collected labels
     Label* current = context.labels;
@@ -1265,7 +1235,6 @@ int analyze_ast(ASTNode *root)
         return 1; // Nothing to analyze
     semantic_errors = 0;
     init_symbol_table();
-    // This single call now drives both semantic analysis and TAC generation.
     analyze_node(root, NULL);
     return semantic_errors == 0;
 }
