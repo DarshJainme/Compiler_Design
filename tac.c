@@ -486,8 +486,7 @@ void print_tac() {
              printf("END_FUNC: ");
              print_addr(instr->res);
              printf("\n");
-        }
-         else {
+        } else {
             printf("\t");
             // Only print "res = " for non-jump/non-control instructions
             if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ && instr->op != TAC_IFNZ && instr->op != TAC_RETURN && instr->op != TAC_PARAM) {
@@ -551,7 +550,8 @@ void print_tac() {
                 case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
 
                 // Function Calls
-                case TAC_RETURN: printf("return "); if(instr->arg1) 
+                case TAC_RETURN: 
+                    printf("return ");
                     if (instr->res) {
                         // return can have an optional value
                         printf(" ");
@@ -653,35 +653,6 @@ TacAddr* emit_conversion(TacAddr* source_addr, Type* target_type) {
 // If is_lvalue is false, returns a temporary/variable containing the *value* of the expression.
 TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
     if (!node) return NULL;
-
-    // Check if we need the address (lvalue) of something that cannot provide one
-    if (is_lvalue) {
-        switch (node->type) {
-             case NODE_CONSTANT:
-             case NODE_STRING_LITERAL:
-             case NODE_BINARY_EXPR:
-             // case NODE_UNARY_EXPR: // '*' is a valid lvalue
-             case NODE_PREFIX_UNARY_EXPR:
-             case NODE_POSTFIX_UNARY_EXPR: // Postfix definitely not lvalue
-             case NODE_FUNC_CALL:
-             case NODE_CONDITIONAL_EXPR:
-             case NODE_CAST_EXPRESSION:
-                 if (node->type == NODE_UNARY_EXPR && node->data.unary_expr.op == '*') {
-                    // This is valid: *ptr
-                    break;
-                 }
-                 // Check for qualified ID (e.g. Class::member) which can be an lvalue
-                 if (node->type == NODE_QUALIFIED_ID) {
-                     break;
-                 }
-                 fprintf(stderr, "Error line %d: Expression is not assignable (not an lvalue).\n", node->lineno);
-                 return NULL; // Cannot take address of these directly
-             // Allowed lvalues: IDENTIFIER, QUALIFIED_ID, ARRAY_SUBSCRIPT, MEMBER_ACCESS (ptr or direct), DEREFERENCE ('*' unary expr)
-             default:
-                 break; // Assume okay for now, handle specific cases below
-        }
-    }
-
 
     switch (node->type) {
         case NODE_CONSTANT: {
@@ -1218,25 +1189,77 @@ void gen_tac_for_node(ASTNode* node) {
             }
             break;
 
+        // --- THIS IS THE MAIN FIX ---
         case NODE_DECLARATION: {
-            // This handles declarations like `int x = 5;`
-            if (!node->data.declaration.declarators) break;
+            if (!node->data.declaration.declarators) break; // e.g., `struct Student;`
+
             for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
                 ASTNode* init_decl = d_item->node;
-                if (init_decl->data.init_declarator.initializer) {
-                    // --- THIS IS THE FIX ---
-                    // Get the lvalue *address* of the declarator
-                    TacAddr* lvalue_addr = gen_tac_for_expr(init_decl->data.init_declarator.declarator, true);
-                    TacAddr* rvalue = gen_tac_for_expr(init_decl->data.init_declarator.initializer, false);
-                    if (!lvalue_addr || !rvalue) continue; // Error occurred
+                ASTNode* declarator = init_decl->data.init_declarator.declarator;
+                ASTNode* initializer = init_decl->data.init_declarator.initializer;
 
-                    Type* target_type = (lvalue_addr->type && lvalue_addr->type->kind == TYPE_POINTER) ? lvalue_addr->type->data.base_info.base : NULL;
-                    if (!target_type) continue; // Error
+                // 1. Find the base Identifier node for this declarator
+                ASTNode* id_node = declarator;
+                while (id_node && id_node->type != NODE_IDENTIFIER) {
+                    if (id_node->type == NODE_POINTER_DECLARATOR) id_node = id_node->data.pointer_declarator.base_declarator;
+                    else if (id_node->type == NODE_ARRAY_DECLARATOR) id_node = id_node->data.array_declarator.base_declarator;
+                    else if (id_node->type == NODE_FUNCTION_DECLARATOR) id_node = id_node->data.function_declarator.base_declarator;
+                    else if (id_node->type == NODE_REFERENCE_DECLARATOR) id_node = id_node->data.reference_declarator.base_declarator;
+                    else id_node = NULL; // Should not happen
+                }
+                
+                if (!id_node || id_node->type != NODE_IDENTIFIER) continue; // No identifier (e.g., abstract declarator)
+                if (!id_node->symbol) { // Safety check
+                     fprintf(stderr, "Compiler Error line %d: No symbol for identifier '%s' in declarator.\n", id_node->lineno, id_node->data.stringValue);
+                     continue;
+                }
 
-                    rvalue = emit_conversion(rvalue, target_type); // Convert initializer
+                // 2. Handle the initializer
+                if (initializer) {
+                    // Get the address of the variable being declared (e.g., `&arr`, `&ptr`, `&a`)
+                    TacAddr* lvalue_addr = gen_tac_for_expr(id_node, true);
+                    if (!lvalue_addr) continue;
 
-                    // Use STORE since lvalue_addr is the address
-                    emit(TAC_STORE, lvalue_addr, rvalue, NULL);
+                    Type* target_type = id_node->symbol->type;
+                    if (!target_type) continue;
+
+                    if (initializer->type == NODE_INITIALIZER_LIST) {
+                        // Handle array initializer list: e.g., `int arr[] = {1, 2, 3};`
+                        Type* elem_type = NULL;
+                        if (target_type->kind == TYPE_ARRAY) {
+                            elem_type = target_type->data.base_info.base;
+                        } else {
+                            fprintf(stderr, "Error line %d: Initializer list used on non-array type '%s'.\n", initializer->lineno, id_node->data.stringValue);
+                            continue;
+                        }
+
+                        int elem_size = get_type_size(elem_type);
+                        int index = 0;
+                        for (ASTNodeList* item = initializer->data.items_list; item; item = item->next, index++) {
+                            // a. Get value of the item (e.g., `1`)
+                            TacAddr* rvalue = gen_tac_for_expr(item->node, false);
+                            if (!rvalue) continue;
+                            rvalue = emit_conversion(rvalue, elem_type);
+
+                            // b. Calculate address: `&arr + (index * elem_size)`
+                            TacAddr* offset = new_temp(create_type(TYPE_INT));
+                            emit(TAC_MUL, offset, new_const_int(index), new_const_int(elem_size));
+                            
+                            TacAddr* elem_addr = new_temp(create_pointer_type(elem_type));
+                            // `lvalue_addr` is the base address of the array
+                            emit(TAC_ADD, elem_addr, lvalue_addr, offset); 
+                            
+                            // c. Store value
+                            emit(TAC_STORE, elem_addr, rvalue, NULL); // `*(elem_addr) = rvalue`
+                        }
+                    } else {
+                        // Handle simple initializer: e.g., `int a = 5;` or `int *ptr = &a;`
+                        TacAddr* rvalue = gen_tac_for_expr(initializer, false);
+                        if (!rvalue) continue;
+
+                        rvalue = emit_conversion(rvalue, target_type);
+                        emit(TAC_STORE, lvalue_addr, rvalue, NULL); // `*(&a) = 5`
+                    }
                 }
             }
             break;
@@ -1267,14 +1290,13 @@ void gen_tac_for_node(ASTNode* node) {
 
             // Ensure there's a return for void functions or if last statement isn't return
             if (!tac_list_tail || (tac_list_tail->op != TAC_RETURN && tac_list_tail->op != TAC_GOTO)) {
-                // Check function return type if available
                 if (func_sym && func_sym->type && func_sym->type->kind == TYPE_FUNCTION &&
                     func_sym->type->data.function_sig.return_type->kind == TYPE_VOID) {
-                    emit(TAC_RETURN, NULL, NULL, NULL);
+                    emit(TAC_RETURN, NULL, NULL, NULL); // FIX: Was emit(TAC_RETURN, NULL, NULL, NULL) which is correct for void
                 } else {
-                    // Non-void function ending without return - semantic error, but emit return 0?
-                     // Let's not emit a default return value for non-void, that's undefined behavior
-                     // emit(TAC_RETURN, NULL, new_const_int(0), NULL); 
+                    // Non-void function ending without return - semantic error
+                    // We'll emit a return without a value, which is fine
+                     emit(TAC_RETURN, NULL, NULL, NULL);
                 }
             }
 
@@ -1412,7 +1434,7 @@ void gen_tac_for_node(ASTNode* node) {
                  // Note: The semantic analyzer should have already inserted a cast
                  // if the return type doesn't match the function's return type.
             }
-            emit(TAC_RETURN, NULL, retval, NULL);
+            emit(TAC_RETURN, retval, NULL, NULL); // FIX: Store return value in `res`
             break;
         }
 
