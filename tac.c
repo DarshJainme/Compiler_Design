@@ -1490,23 +1490,37 @@ void gen_tac_for_node(ASTNode* node) {
             break;
          }
         case NODE_UNTIL_STATEMENT: {
-            TacAddr* start_label = new_label_addr(); // Loop body start
-            TacAddr* cond_label = new_label_addr();  // Condition check
-            TacAddr* end_label = new_label_addr();   // After loop
+            TacAddr* start_label = new_label_addr();
+            TacAddr* end_label = new_label_addr();
 
-            push_control_flow(end_label, cond_label);
+            // An 'until' loop is equivalent to 'while(!condition)'.
+            // We need to check the condition at the top.
+            
+            push_loop_labels(start_label, end_label); // continue jumps to condition, break jumps to end
 
+            // Label for the start of the loop (condition check)
             emit(TAC_LABEL, start_label, NULL, NULL);
+
+            // Generate TAC for the condition.
+            // If the condition is TRUE, we exit the loop (jump to end_label).
+            // If the condition is FALSE, we fall through to the loop body.
+            TacAddr* cond_val = gen_tac_for_expr(node->data.until_statement.condition, false);
+            if (cond_val) {
+                emit(TAC_IFNZ, end_label, cond_val, NULL); // if (condition != 0) goto end_label;
+            }
+
+            // Generate TAC for the loop body.
             gen_tac_for_node(node->data.until_statement.body);
 
-            emit(TAC_LABEL, cond_label, NULL, NULL);
-            // Inverted logic for UNTIL: if(condition) goto end; else goto start;
-            gen_tac_for_condition(node->data.until_statement.condition, end_label, start_label); // True->End, False->Start
+            // After the body, jump back to the condition check.
+            emit(TAC_GOTO, start_label, NULL, NULL);
 
+            // Label for the end of the loop.
             emit(TAC_LABEL, end_label, NULL, NULL);
-            pop_control_flow();
+
+            pop_loop_labels();
             break;
-         }
+        }
         case NODE_DO_WHILE_STATEMENT: {
             TacAddr* start_label = new_label_addr(); // Body start
             TacAddr* cond_label = new_label_addr(); // Condition check
