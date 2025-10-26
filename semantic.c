@@ -8,7 +8,8 @@
 #include "st.h"
 #include "tac.h"
 
-extern int semantic_errors;
+int semantic_errors=0;
+// Define it with a type and value in one .c file.
 // static Type *current_function_return_type = NULL;
 
 // Forward Declarations for Traversal
@@ -698,9 +699,20 @@ void analyze_and_gen_tac_for_loop(ASTNode* node, FunctionAnalysisContext* contex
         // Condition
         analyze_expression(node->data.do_while_statement.condition);
         TacAddr* cond_addr = gen_tac_for_expr(node->data.do_while_statement.condition);
-        emit(TAC_IFNZ, start_label, cond_addr, NULL); // Note: IFNZ for do-while
+        emit(TAC_IFNZ, start_label, cond_addr, NULL); // IFNZ for do-while
     }
-    // TODO: Handle until
+    // handled until
+    else if (node->type == NODE_UNTIL_STATEMENT) {
+        emit(TAC_LABEL, start_label, NULL, NULL);
+        // Condition: An 'until' loop runs while the condition is FALSE.
+        // So, we jump out if the condition is TRUE (if not zero).
+        analyze_expression(node->data.until_statement.condition);
+        TacAddr* cond_addr = gen_tac_for_expr(node->data.until_statement.condition);
+        emit(TAC_IFNZ, end_label, cond_addr, NULL); // we will Use IFNZ
+        // Body
+        analyze_statement_with_context(node->data.until_statement.body, context);
+        emit(TAC_GOTO, start_label, NULL, NULL);
+    }
 
     emit(TAC_LABEL, end_label, NULL, NULL);
     pop_loop_labels();
