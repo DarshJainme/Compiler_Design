@@ -2,11 +2,9 @@
 #define TAC_H
 
 #include "symbol_table.h"
-// Forward declare ASTNode to avoid circular dependency if tac.h is included elsewhere
 struct ASTNode;
 
 // The different kinds of operations in our three-address code
-// (Corrected to match tac.c)
 typedef enum {
     TAC_UNDEF,
     TAC_BEGIN_FUNC, // Marker for function start (prologue)
@@ -79,20 +77,17 @@ typedef enum {
 } TacOp;
 
 // The different kinds of operands (addresses)
-// (Corrected to match tac.c)
 typedef enum {
     ADDR_NONE,          
     ADDR_TEMP,          // A compiler-generated temporary variable (e.g., t1, t2)
     ADDR_VARIABLE,      // A user-defined variable (e.g., a, b, myFunc)
     ADDR_CONSTANT_INT,  // An integer constant (e.g., 5, 100)
     ADDR_CONSTANT_FLOAT,// A float/double constant (e.g., 5.5, 3.14)
-    // ADDR_CONSTANT_CHAR is handled as ADDR_CONSTANT_INT in tac.c
     ADDR_LABEL,         // A label (e.g., L1, L2)
     ADDR_STRING,        // A string literal identifier (e.g., S0)
 } TacAddrKind;
 
 // A single operand/address in the instruction
-// (Corrected to match tac.c)
 typedef struct TacAddr {
     TacAddrKind kind;
     struct Type* type; // Type information for casting/promotion
@@ -112,7 +107,7 @@ typedef struct TacAddr {
         
         // ADDR_STRING
         char* string_label; // The label name (e.g., "S0")
-    } val; // tac.c uses 'val'
+    } val;
 } TacAddr;
 
 // A single three-address instruction (a quadruple)

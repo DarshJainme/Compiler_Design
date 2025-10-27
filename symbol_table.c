@@ -9,7 +9,6 @@ extern int yylineno;
 // extern int semantic_errors;
 void init_symbol_table() {
     if (current_scope) {
-        // This should not happen, but as a safeguard
         while (current_scope->parent) {
             leave_scope();
         }
@@ -54,12 +53,12 @@ Scope* leave_scope() {
 }
 
 Symbol* add_symbol(const char* name, Type* type, SymbolKind kind, int lineno) {
-    // Check if symbol already exists in current scope
+    // Checking if symbol already exists in current scope
     for (int i = 0; i < current_scope->symbol_count; i++) {
         if (strcmp(current_scope->symbols[i]->name, name) == 0) {
             fprintf(stderr, "Semantic Error (Line %d): Redefinition of '%s'.\n", lineno, name);
             semantic_errors++;
-            return NULL; // Reject duplicate
+            return NULL;
         }
     }
 

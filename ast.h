@@ -70,8 +70,6 @@ typedef enum {
     NODE_CLASS_SPECIFIER,
     NODE_ACCESS_SPECIFIER,
     NODE_BASE_CLASS,
-
-    // added for scope operators
     NODE_QUALIFIED_ID,
     // Utility nodes
     NODE_ARGUMENT_LIST,    // Generic list for function arguments
@@ -85,7 +83,6 @@ typedef struct ASTNodeList {
     struct ASTNodeList* next;
 } ASTNodeList;
 
-// this struct will be used inside the type system for structs/unions
 typedef struct Member {
     char *name;
     struct Type *type;
@@ -287,7 +284,6 @@ typedef struct ASTNode {
             ASTNodeList *members;
         } enum_specifier;
 
-        // Add this new struct for an enumerator member
         struct {
             char *name;
             struct ASTNode *value; // Can be NULL
@@ -366,10 +362,8 @@ ASTNode* create_new_expr_node(ASTNode* type_name, ASTNode* initializer);
 ASTNode* create_delete_expr_node(ASTNode* expr);
 ASTNode *create_enumerator_node(char *name, ASTNode *value);
 ASTNode *create_initializer_list_node(ASTNodeList *items);
-// added for the scope resoluion operator.
 ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier);
 
-// Function to print the AST for debugging
 void print_ast(ASTNode* node, int indent);
 const char* token_to_string(int token);
 

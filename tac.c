@@ -4,9 +4,9 @@
 #include <stdbool.h>
 #include "tac.h"
 #include "parser.tab.h" // For token definitions like EQ_OP, LE_OP etc.
-#include "ast.h"        // Need the full AST definition
-#include "types.h"      // Need type information
-#include "symbol_table.h" // Need symbol table access
+#include "ast.h"        
+#include "types.h"      
+#include "symbol_table.h"
 
 TacInstr* tac_list_head = NULL;
 TacInstr* tac_list_tail = NULL;
@@ -34,7 +34,7 @@ void push_control_flow(TacAddr* break_lbl, TacAddr* continue_lbl) {
         control_flow_stack[control_flow_stack_top].continue_label = continue_lbl;
     } else {
         fprintf(stderr, "Error: Loop/switch nesting depth exceeded.\n");
-        // Exit or handle error
+        // we will handle error later
     }
 }
 
@@ -50,8 +50,7 @@ ControlFlowContext* current_control_flow() {
     }
     return NULL;
 }
-// --- End Context ---
-// --- NEW: GOTO/LABEL Map for Function Scopes ---
+
 typedef struct LabelMap {
     char* name;
     TacAddr* addr;
@@ -68,7 +67,7 @@ void map_new_label(const char* name) {
     // Check if it already exists
     for (LabelMap* l = current_label_map; l; l = l->next) {
         if (l->name && strcmp(l->name, name) == 0) {
-            return; // Already mapped (semantic should have caught duplicates)
+            return;
         }
     }
 
@@ -88,7 +87,7 @@ TacAddr* get_label_addr(const char* name) {
             return l->addr;
         }
     }
-    return NULL; // Should not happen if semantic analysis passed
+    return NULL;
 }
 
 // Frees the label map
@@ -97,7 +96,6 @@ void destroy_label_map() {
     while (l) {
         LabelMap* next = l->next;
         free(l->name);
-        // Do not free l->addr, it's owned by the TAC list
         free(l);
         l = next;
     }
@@ -233,11 +231,10 @@ TacAddr* calculate_array_offset_recursive_new(ASTNode* base_node, ASTNodeList* s
     return total_offset;
 }
 
-/* --- Type Size Helper (Simplified) --- */
 int get_type_size(Type* type) {
     if (!type) return 0;
 
-    // --- NEW: Handle potential typedefs ---
+    // Handle potential typedefs
     // If the type name comes from a typedef, we need the underlying type size.
     // This requires the symbol table info, which we don't have here.
     // The type passed SHOULD ideally be the resolved base type after semantic analysis.
@@ -260,7 +257,7 @@ int get_type_size(Type* type) {
                           return 8; // Assuming 64-bit architecture
 
         case TYPE_ARRAY: {
-            // --- FULL ARRAY SIZE CALCULATION ---
+            // FULL ARRAY SIZE CALCULATION
             if (type->data.base_info.num_dimensions == 0) {
                  fprintf(stderr, "Warning: Cannot calculate size of array with no dimensions specified.\n");
                  return 0; // Or return base size? Returning 0 is safer.
@@ -278,22 +275,19 @@ int get_type_size(Type* type) {
                 int dim_size = type->data.base_info.dimensions[i];
                 if (dim_size <= 0) {
                      fprintf(stderr, "Warning: Cannot calculate size of array with unspecified or zero dimension (dimension %d).\n", i);
-                     // This is valid C for function parameters or extern declarations,
-                     // but we can't get a total size.
                      return 0;
                 }
                 total_size *= dim_size;
             }
             return total_size;
-            // --- END ARRAY CALCULATION ---
         }
         case TYPE_STRUCT: {
-             // --- STRUCT SIZE CALCULATION (with basic alignment) ---
+             // STRUCT SIZE CALCULATION (with basic alignment)
              int size = 0;
              int max_alignment = 1;
              for (Member* m = type->data.struct_union_info.members; m; m = m->next) {
                  int member_size = get_type_size(m->type);
-                 int member_alignment = member_size; // Simplified: align to size
+                 int member_alignment = member_size;
                  if (member_alignment > max_alignment) max_alignment = member_alignment;
 
                  // Add padding before member if needed
@@ -307,10 +301,9 @@ int get_type_size(Type* type) {
                  size += max_alignment - (size % max_alignment);
              }
              return size > 0 ? size : 1; // Structs usually have min size 1
-             // --- END STRUCT CALCULATION ---
         }
         case TYPE_UNION: {
-             // --- UNION SIZE CALCULATION ---
+             // UNION SIZE CALCULATION
              int max_member_size = 0;
              for (Member* m = type->data.struct_union_info.members; m; m = m->next) {
                  int member_size = get_type_size(m->type);
@@ -320,7 +313,6 @@ int get_type_size(Type* type) {
              }
              // Union size also needs alignment, typically to the largest member's alignment
              return max_member_size > 0 ? max_member_size : 1; // Unions usually have min size 1
-             // --- END UNION CALCULATION ---
         }
         default:
              fprintf(stderr, "Warning: Cannot determine size for type kind %d.\n", type->kind);
@@ -328,7 +320,7 @@ int get_type_size(Type* type) {
     }
 }
 
-/* --- Struct Member Offset Helper (Simplified) --- */
+/* --- Struct Member Offset Helper --- */
 int get_member_offset(Type* struct_type, const char* member_name) {
     if (!struct_type || (struct_type->kind != TYPE_STRUCT && struct_type->kind != TYPE_UNION)) return -1;
     if (struct_type->kind == TYPE_UNION) return 0; // All union members start at offset 0
@@ -338,7 +330,7 @@ int get_member_offset(Type* struct_type, const char* member_name) {
         if (strcmp(m->name, member_name) == 0) {
             return offset;
         }
-        offset += get_type_size(m->type); // Simplified: no padding/alignment
+        offset += get_type_size(m->type); // no padding/alignment
     }
     return -1; // Member not found
 }
@@ -399,7 +391,7 @@ TacAddr* new_label_addr() {
     return addr;
 }
 
-// Renamed and New Constant Creators
+// Constant Creators
 TacAddr* new_const_int(int val) {
     TacAddr* addr = (TacAddr*)calloc(1, sizeof(TacAddr));
     addr->kind = ADDR_CONSTANT_INT;
@@ -480,7 +472,7 @@ void emit(TacOp op, TacAddr* res, TacAddr* arg1, TacAddr* arg2) {
     instr->prev = tac_list_tail;
 
     if (!instr->res && (op == TAC_LABEL || op == TAC_GOTO || op == TAC_IFZ || op == TAC_IFNZ || op == TAC_STORE)) {
-         // These ops use 'res' for label or store address, allow NULL if not needed by op
+         // These ops use 'res' for label or store address
     } else if (!instr->res && op != TAC_BEGIN_FUNC && op != TAC_END_FUNC && op != TAC_PARAM && op != TAC_RETURN && op != TAC_CALL) {
         // Most ops require a result address, except those listed above
         // fprintf(stderr, "Warning: Emitting instruction (Op: %d) with NULL result address.\n", op);
@@ -517,7 +509,7 @@ void print_addr(TacAddr* addr) {
 
 // Helper to map binary AST ops to TAC ops
 TacOp get_tac_op_for_binary(int ast_op, Type* type1, Type* type2) {
-    // Determine if float operation is needed
+    // Determining if float operation is needed
     bool is_float = (type1 && (type1->kind == TYPE_FLOAT || type1->kind == TYPE_DOUBLE)) ||
                     (type2 && (type2->kind == TYPE_FLOAT || type2->kind == TYPE_DOUBLE));
 
@@ -526,7 +518,7 @@ TacOp get_tac_op_for_binary(int ast_op, Type* type1, Type* type2) {
         case '-': return is_float ? TAC_FSUB : TAC_SUB;
         case '*': return is_float ? TAC_FMUL : TAC_MUL;
         case '/': return is_float ? TAC_FDIV : TAC_DIV;
-        case '%': return TAC_MOD; // Modulo usually integer only
+        case '%': return TAC_MOD; // Modulo is for integer only
 
         // Bitwise/Shift are integer only
         case '&': return TAC_BAND;
@@ -592,13 +584,12 @@ void print_tac() {
                  case '"': printf("\\\""); break;
                  case '\n': printf("\\n"); break;
                  case '\t': printf("\\t"); break;
-                 // Add other escapes if needed
                  default: putchar(*p); break;
              }
          }
          printf("\"\n");
     }
-    string_literal_list = NULL; // Clear/reset for potential future use
+    string_literal_list = NULL;
 
 
     printf("\n--- Three-Address Code (Text Segment) ---\n");
@@ -618,7 +609,6 @@ void print_tac() {
              printf("\n");
         } else {
             printf("\t");
-            // Do not print a generic "res = " for ops that handle their own formatting
             if (instr->res && instr->op != TAC_GOTO && instr->op != TAC_IFZ &&
                 instr->op != TAC_IFNZ && instr->op != TAC_STORE &&
                 instr->op != TAC_PARAM && instr->op != TAC_LABEL &&
@@ -679,7 +669,6 @@ void print_tac() {
 
 
                 // Jumps & Labels
-                // Correction in printing jump instructions
                 case TAC_GOTO: printf("goto "); print_addr(instr->res); break;
                 case TAC_IFZ: printf("ifz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
                 case TAC_IFNZ: printf("ifnz "); print_addr(instr->arg1); printf(" goto "); print_addr(instr->res); break;
@@ -693,7 +682,7 @@ void print_tac() {
                    break;
                 case TAC_RETURN:
                     printf("return");
-                    if (instr->arg1) { // --- FIX: Check arg1 for return value ---
+                    if (instr->arg1) {
                         printf(" ");
                         print_addr(instr->arg1);
                     }
@@ -710,7 +699,7 @@ void print_tac() {
                  case TAC_DEREF: printf("*"); print_addr(instr->arg1); break;
                  case TAC_LEA: print_addr(instr->arg1); printf(" + "); print_addr(instr->arg2); break; // Or specific LEA format
 
-                 // Array/Member Access (Simplified)
+                 // Array/Member Access
                  case TAC_INDEX_READ: print_addr(instr->arg1); printf("["); print_addr(instr->arg2); printf("]"); break;
                  case TAC_INDEX_WRITE: print_addr(instr->arg1); printf("["); print_addr(instr->arg2); printf("] = "); print_addr(instr->res); break;
 
@@ -759,14 +748,12 @@ void gen_tac_for_initializer_list(TacAddr* base_addr, Type* aggregate_type, ASTN
             elem_type = aggregate_type->data.base_info.base;
             if (!elem_type) { /* Error */ continue; }
 
-            // --- CORRECTED OFFSET/STRIDE CALCULATION ---
             int element_size_with_padding = get_type_size(elem_type); // Get full size including potential padding
             if (element_size_with_padding <= 0 && elem_type->kind != TYPE_VOID) {
                 fprintf(stderr, "Error line %d: Cannot determine size of array element type '%s'.\n", current_init_node->lineno, type_to_string(elem_type));
                 return; // Cannot proceed
             }
             elem_offset = index * element_size_with_padding; // Offset = index * size_of_element_including_padding
-            // --- END CORRECTION ---
 
             index++; // Increment index only for arrays
 
@@ -787,7 +774,6 @@ void gen_tac_for_initializer_list(TacAddr* base_addr, Type* aggregate_type, ASTN
             }
             elem_offset = current_struct_offset;
             current_struct_offset += member_size; // Advance offset for next member
-            // --- End alignment ---
 
             current_member = current_member->next;
         }
@@ -815,7 +801,7 @@ void gen_tac_for_initializer_list(TacAddr* base_addr, Type* aggregate_type, ASTN
     }
 }
 
-// NEW RECURSIVE INITIALIZER FUNCTION
+// RECURSIVE INITIALIZER FUNCTION
 void gen_tac_for_init_list_recursive(TacAddr* base_addr, Type* current_type, ASTNodeList* items, int* current_byte_offset) {
     if (!current_type || !items) return;
 
@@ -873,7 +859,6 @@ void gen_tac_for_init_list_recursive(TacAddr* base_addr, Type* current_type, AST
         Member* current_member = current_type->data.struct_union_info.members;
         for (ASTNodeList* item = items; item && current_member; item = item->next, current_member = current_member->next) {
              // This part can be implemented later using the same offset logic.
-             // For now, we focus on the array fix.
              fprintf(stderr, "Warning: TAC generation for struct initializers is not fully implemented.\n");
         }
     }
@@ -892,9 +877,6 @@ void generate_tac(ASTNode* root) {
     string_literal_list = NULL; // Clear string literal list
 
     gen_tac_for_node(root);
-
-    // Clean up string literal list (optional, if needed elsewhere)
-    // while (string_literal_list) { ... free ... }
 }
 
 TacAddr* emit_conversion(TacAddr* source_addr, Type* target_type) {
@@ -932,8 +914,6 @@ TacAddr* emit_conversion(TacAddr* source_addr, Type* target_type) {
         return result;
     }
     
-    // Add other conversions if needed (e.g., int sizes)
-    // For now, assume other compatible types don't need explicit TAC conversion
     source_addr->type = copy_type(target_type); // Update type if implicitly converted
     return source_addr;
 }
@@ -964,7 +944,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 }
                 return const_addr;
             } else { // Integer types
-                // Handle hex (0x...), octal (0...), binary (0b...) if needed
                 // For simplicity, using strtol for auto-detection
                 return new_const_int((int)strtol(node->data.stringValue, NULL, 0));
             }
@@ -974,7 +953,7 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             return new_string_addr(node->data.stringValue);
 
         case NODE_IDENTIFIER: {
-            Symbol* sym = node->symbol; // <<<--- Get symbol directly from AST annotation
+            Symbol* sym = node->symbol;
 
             if (!sym) {
                 // If the symbol is NULL here, it means semantic analysis failed to annotate it.
@@ -1065,7 +1044,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
 
                         fprintf(stderr, "Warning line %d: String concatenation TAC requires runtime support (emitting placeholder).\n", node->lineno);
 
-                        // Placeholder: Assume a function _string_concat exists
                         Symbol* concat_sym = find_symbol("_string_concat"); // Need to predefine this or handle lookup failure
                         if (!concat_sym) {
                             // Create a dummy symbol if needed for TAC
@@ -1076,8 +1054,8 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
 
                         TacAddr* result = new_temp(create_type(TYPE_STRING)); // Assuming result is string
                         // Emit params (reverse order)
-                        emit(TAC_PARAM, NULL, right, NULL); // TODO: Convert right to string if needed
-                        emit(TAC_PARAM, NULL, left, NULL);  // TODO: Convert left to string if needed
+                        emit(TAC_PARAM, NULL, right, NULL);
+                        emit(TAC_PARAM, NULL, left, NULL);
                         emit(TAC_CALL, result, new_var_addr(concat_sym), new_const_int(2));
                         return result;
                     }
@@ -1234,10 +1212,9 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                  emit(TAC_STORE, lvalue_addr, rvalue, NULL); // *(addr_L) = rvalue
                  final_rvalue = rvalue; // --- The assigned value is the result ---
             }
-            // --- MODIFICATION: Return the final R-value ---
+            // --- Return the final R-value ---
             // The value of an assignment expression is the value that was assigned.
             return final_rvalue;
-            // --- END MODIFICATION ---
         }
 
         case NODE_FUNC_CALL: { // Cannot be lvalue
@@ -1324,17 +1301,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
              TacAddr* true_label = new_label_addr();
              TacAddr* false_label = new_label_addr();
              TacAddr* end_label = new_label_addr();
-
-             // We need the result temp *before* the branches to assign to it.
-             // The semantic analyzer has already inserted cast nodes,
-             // so both branches will evaluate to the same type.
-             // We can generate the code for the true_expr, check its type,
-             // and create the result temporary based on that.
-             // This is still not ideal (side effects), but it's the
-             // simplest fix without annotating the AST.
-
-             // Let's create the result temp *after* the true branch
-             // This is the cleanest logic.
              gen_tac_for_condition(node->data.conditional_expr.condition, true_label, false_label);
 
              // True part
@@ -1361,7 +1327,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
          }
 
         case NODE_ARRAY_SUBSCRIPT: {
-            // --- REVISED LOGIC FOR MULTIDIMENSIONAL ACCESS ---
             // 1. Traverse inwards to find the base identifier/expression
             ASTNode* base_expr_node = node;
             ASTNodeList* subscript_list = NULL;
@@ -1438,7 +1403,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 emit(TAC_DEREF, result, element_addr, NULL); // result = *element_addr
                 return result;
             }
-            // --- END REVISED LOGIC ---
         }
 
         case NODE_MEMBER_ACCESS: {
@@ -1505,7 +1469,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
              }
          }
 
-        // --- NEW: NODE_CAST_EXPRESSION ---
         case NODE_CAST_EXPRESSION: {
             TacAddr* expr_val = gen_tac_for_expr(node->data.cast_expr.expr, false);
             if (!expr_val) return NULL;
@@ -1522,12 +1485,9 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 else if (strcmp(type_str, "double") == 0) target_type = create_type(TYPE_DOUBLE);
                 else if (strcmp(type_str, "char") == 0) target_type = create_type(TYPE_CHAR);
                 else if (strcmp(type_str, "bool") == 0) target_type = create_type(TYPE_BOOL);
-                // --- FIX: Handle char[] as char* ---
                 else if (strcmp(type_str, "char[]") == 0) {
                      target_type = create_pointer_type(create_type(TYPE_CHAR));
                 }
-                // --- END FIX ---
-                // Add more complex pointer/array types if needed
             }
             else {
                  fprintf(stderr, "Error line %d: Invalid type specified in cast.\n", node->lineno);
@@ -1630,7 +1590,6 @@ void gen_tac_for_node(ASTNode* node) {
             }
             break;
 
-        // --- THIS IS THE MAIN FIX ---
         case NODE_DECLARATION: {
             if (!node->data.declaration.declarators) break; // e.g., `struct Student;`
 
@@ -1680,17 +1639,14 @@ void gen_tac_for_node(ASTNode* node) {
                     if (!target_type) continue;
 
                     if (initializer->type == NODE_INITIALIZER_LIST) {
-                         // --- FIX FOR NESTED INITIALIZERS
                          int total_byte_offset = 0;
                          gen_tac_for_init_list_recursive(lvalue_addr, target_type, initializer->data.items_list, &total_byte_offset);
-                         // --- END FIX ---
                     } else {
                         TacAddr* rvalue = gen_tac_for_expr(initializer, false);
                         if (!rvalue) continue;
                         rvalue = emit_conversion(rvalue, target_type);
                         // --- Use res=address, arg1=value for STORE ---
                         emit(TAC_STORE, lvalue_addr, rvalue, NULL);
-                        // --- END FIX ---
                     }
                 }
             }
@@ -1709,14 +1665,11 @@ void gen_tac_for_node(ASTNode* node) {
             }
 
 
-            // --- NEW: GOTO/LABEL Pre-pass ---
             destroy_label_map(); // Clear any previous map
             find_all_labels_in_body(node->data.function_definition.body); // Pre-pass
             // --- END NEW ---
 
             emit(TAC_BEGIN_FUNC, func_label, NULL, NULL);
-            // TODO: Emit TAC for parameter retrieval from stack/registers
-            // TODO: Emit TAC for local variable stack allocation (requires pre-pass)
 
             gen_tac_for_node(node->data.function_definition.body);
 
@@ -1724,7 +1677,7 @@ void gen_tac_for_node(ASTNode* node) {
             if (!tac_list_tail || (tac_list_tail->op != TAC_RETURN && tac_list_tail->op != TAC_GOTO)) {
                 if (func_sym && func_sym->type && func_sym->type->kind == TYPE_FUNCTION &&
                     func_sym->type->data.function_sig.return_type->kind == TYPE_VOID) {
-                    emit(TAC_RETURN, NULL, NULL, NULL); // FIX: Was emit(TAC_RETURN, NULL, NULL, NULL) which is correct for void
+                    emit(TAC_RETURN, NULL, NULL, NULL); 
                 } else {
                     // Non-void function ending without return - semantic error
                     // We'll emit a return without a value, which is fine
@@ -1736,11 +1689,9 @@ void gen_tac_for_node(ASTNode* node) {
             break;
         }
         case NODE_COMPOUND_STATEMENT:
-            // Enter scope conceptually for symbol table if needed, not usually for TAC
             for (ASTNodeList* item = node->data.compound_statement.items; item; item = item->next) {
                 gen_tac_for_node(item->node);
             }
-            // Leave scope conceptually
             break;
 
         case NODE_EXPRESSION_STATEMENT:
@@ -1881,7 +1832,6 @@ void gen_tac_for_node(ASTNode* node) {
                      // Emit return without value as fallback?
                      emit(TAC_RETURN, NULL /* No result reg needed */, NULL /* No value */, NULL);
                  } else {
-                     // --- FIX: Pass return value as ARG1 ---
                      emit(TAC_RETURN, NULL /* No result reg needed */, retval /* Value to return */, NULL);
                  }
             } else {
@@ -1917,7 +1867,6 @@ void gen_tac_for_node(ASTNode* node) {
              TacAddr* end_label = new_label_addr();
              TacAddr* default_label = NULL; // Will be assigned if a default case exists
 
-             // --- START OF FIX: Revised Switch Logic ---
 
              // A structure to link case statements in the AST to their TAC labels
              typedef struct CaseInfo {
