@@ -1198,6 +1198,41 @@ Type *analyze_expression(ASTNode *node)
                  semantic_errors++;
                  return create_type(TYPE_UNKNOWN);
             }
+
+            // Argument count and type checking
+            ASTNodeList* expected_params = func_expr_type->data.function_sig.params;
+            ASTNodeList* actual_args = node->data.func_call.arguments;
+            int expected_count = 0;
+            int actual_count = 0;
+
+            // Count expected fixed parameters
+            for (ASTNodeList* p = expected_params; p; p = p->next) {
+                // The NULL node marker for variadics should not be counted.
+                if (p->node) expected_count++;
+            }
+
+            // Count actual arguments
+            for (ASTNodeList* a = actual_args; a; a = a->next) {
+                actual_count++;
+            }
+
+            // Check argument count
+            if (func_expr_type->data.function_sig.is_variadic) {
+                if (actual_count < expected_count) {
+                    fprintf(stderr, "Semantic Error (Line %d): Too few arguments to variadic function. Expected at least %d, got %d.\n", node->lineno, expected_count, actual_count);
+                    semantic_errors++;
+                }
+            } else { // Not variadic
+                if (actual_count != expected_count) {
+                    fprintf(stderr, "Semantic Error (Line %d): Wrong number of arguments to function. Expected %d, got %d.\n", node->lineno, expected_count, actual_count);
+                    semantic_errors++;
+                }
+            }
+            
+            // Analyze the types of all provided arguments
+            for (ASTNodeList* a = actual_args; a; a = a->next) {
+                analyze_expression(a->node);
+            }
             return func_expr_type->data.function_sig.return_type;
         }
 

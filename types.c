@@ -351,7 +351,19 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
                 Type* func_type = create_type(TYPE_FUNCTION);
                 func_type->data.function_sig.return_type = current_type; // Type built so far is return type
                 func_type->data.function_sig.params = current->data.function_declarator.parameters;
-                // TODO: Process parameter types within the function declarator node if needed here
+                
+                // Check for variadic functions
+                func_type->data.function_sig.is_variadic = false; // Default to false
+                if (func_type->data.function_sig.params) {
+                    ASTNodeList* p = func_type->data.function_sig.params;
+                    while (p->next) {
+                        p = p->next;
+                    }
+                    // If the last item in the list is a NULL node, it's variadic.
+                    if (p->node == NULL) {
+                        func_type->data.function_sig.is_variadic = true;
+                    }
+                }
                 current_type = func_type;
                 current = current->data.function_declarator.base_declarator;
                 break;

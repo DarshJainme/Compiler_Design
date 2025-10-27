@@ -54,6 +54,7 @@ struct Type {
         struct {
             struct Type* return_type;
             ASTNodeList* params; // We'll link to AST nodes for param types
+            bool is_variadic;
         } function_sig;
         
         // For structs and unions

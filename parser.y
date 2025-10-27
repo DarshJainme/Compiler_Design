@@ -600,7 +600,11 @@ type_qualifier_list
 
 parameter_type_list
     : parameter_list
-    | parameter_list ',' ELLIPSIS { $$ = $1; }
+    | parameter_list ',' ELLIPSIS { 
+        // Use a special node to signal that this is a variadic function.
+        // We'll append a NULL node to the list. The semantic analyzer will check for this.
+        $$ = append_to_list($1, NULL); 
+    }
     ;
 
 parameter_list
