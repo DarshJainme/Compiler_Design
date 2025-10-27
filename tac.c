@@ -1530,6 +1530,13 @@ void gen_tac_for_node(ASTNode* node) {
         case NODE_DECLARATION: {
             if (!node->data.declaration.declarators) break; // e.g., `struct Student;`
 
+            // Check if this is a typedef; if so, it produces no executable code.
+            if (node->data.declaration.specifiers && node->data.declaration.specifiers->node) {
+                ASTNode* first_spec = node->data.declaration.specifiers->node;
+                if (first_spec->type == NODE_SPECIFIER && first_spec->data.specifier == TYPEDEF) {
+                    break; // Skip TAC generation for typedefs
+                }
+            }
             for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
                 ASTNode* init_decl = d_item->node;
                 ASTNode* declarator = init_decl->data.init_declarator.declarator;
