@@ -71,4 +71,5 @@ int main() {
     // 8. Pointers
     int *ptr = &a;
     // printf("Pointer Value: %d, Address: %p\n", *ptr, ptr);
+    return 0;
 }

@@ -49,10 +49,11 @@ Type* create_reference_type(Type* base) {
     return ref_type;
 }
 
-Type* create_array_type(Type* base, int size) {
+Type* create_array_type(Type* base, int size) { // Size param might be unused if size comes from AST later
     Type* arr_type = create_type(TYPE_ARRAY);
     arr_type->data.base_info.base = base;
-    // You would store the size here if it's known
+    arr_type->data.base_info.num_dimensions = 0; // Initialize
+    // Dimensions will be added by semantic analysis
     return arr_type;
 }
 
@@ -247,38 +248,126 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
 
 Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
     if (!declarator) return base_type;
-    
+
     Type* final_type = base_type;
     ASTNode* current = declarator;
-    
-    // This loop peels layers off the declarator, building the type from the inside out.
-    while (current && current->type != NODE_IDENTIFIER) {
-        switch (current->type) {
+
+    // --- REVISED LOGIC ---
+    // This loop processes the declarator chain from the identifier outwards.
+    // Example: int *arr[10];
+    // innermost: arr (identifier)
+    // next:      [10] (array declarator)
+    // next:      * (pointer declarator)
+    // base_type starts as 'int'
+
+    // 1. Find the innermost part (usually identifier or parentheses)
+    ASTNode* innermost = declarator;
+    while (innermost && innermost->type != NODE_IDENTIFIER && innermost->type != NODE_QUALIFIED_ID) {
+        switch(innermost->type) {
             case NODE_POINTER_DECLARATOR:
-                final_type = create_pointer_type(final_type);
-                current = current->data.pointer_declarator.base_declarator;
-                break;
-            case NODE_REFERENCE_DECLARATOR:
-                final_type = create_reference_type(final_type);
-                current = current->data.reference_declarator.base_declarator;
+                innermost = innermost->data.pointer_declarator.base_declarator;
                 break;
             case NODE_ARRAY_DECLARATOR:
-                final_type = create_array_type(final_type, 0); // Size not handled yet
-                current = current->data.array_declarator.base_declarator;
+                innermost = innermost->data.array_declarator.base_declarator;
                 break;
-            case NODE_FUNCTION_DECLARATOR: {
-                Type* func_type = create_type(TYPE_FUNCTION);
-                func_type->data.function_sig.return_type = final_type; // The type built so far is the return type
-                func_type->data.function_sig.params = current->data.function_declarator.parameters;
-                final_type = func_type;
-                current = current->data.function_declarator.base_declarator;
+            case NODE_FUNCTION_DECLARATOR:
+                innermost = innermost->data.function_declarator.base_declarator;
                 break;
-            }
-            default: 
-                current = NULL; // Stop for other node types
+            case NODE_REFERENCE_DECLARATOR:
+                innermost = innermost->data.reference_declarator.base_declarator;
+                break;
+            default: // Like '(' declarator ')' - need to handle parentheses if needed
+                innermost = NULL; // Stop if unexpected type encountered
                 break;
         }
     }
+
+    // 2. Build type outwards from the base_type, following the chain back to the original declarator
+    Type* current_type = base_type;
+    current = declarator;
+
+    while (current && current != innermost) {
+        switch (current->type) {
+            case NODE_POINTER_DECLARATOR:
+                current_type = create_pointer_type(current_type);
+                // Apply qualifiers from the pointer node itself
+                if (current->data.pointer_declarator.pointer && current->data.pointer_declarator.pointer->data.pointer.qualifiers) {
+                    for(ASTNodeList* q = current->data.pointer_declarator.pointer->data.pointer.qualifiers; q; q=q->next) {
+                         if(q->node->data.specifier == CONST) current_type->is_const = 1;
+                         // Handle VOLATILE etc. if needed
+                    }
+                }
+                current = current->data.pointer_declarator.base_declarator;
+                break;
+            case NODE_REFERENCE_DECLARATOR:
+                current_type = create_reference_type(current_type);
+                current = current->data.reference_declarator.base_declarator;
+                break;
+            case NODE_ARRAY_DECLARATOR: {
+                int size = 0;
+                if (current->data.array_declarator.size) {
+                    // Evaluate constant expression for size (Simplified: assume constant)
+                    if (current->data.array_declarator.size->type == NODE_CONSTANT) {
+                         size = atoi(current->data.array_declarator.size->data.stringValue);
+                         if (size <= 0) {
+                              fprintf(stderr, "Semantic Error line %d: Array size must be positive.\n", current->lineno);
+                              semantic_errors++;
+                              size = 0; // Treat as invalid/unknown size
+                         }
+                    } else {
+                         fprintf(stderr, "Semantic Error line %d: Array size must be a constant integer expression.\n", current->lineno);
+                         semantic_errors++;
+                         size = 0; // Treat as invalid/unknown size
+                    }
+                } else {
+                     size = 0; // Size unspecified (e.g., [], or deduced from initializer)
+                }
+
+                // Create a NEW array type whose base is the current_type
+                Type* new_array_type = create_type(TYPE_ARRAY);
+                new_array_type->data.base_info.base = current_type; // The element type is the type built so far
+                new_array_type->data.base_info.num_dimensions = 1; // This node adds one dimension
+                new_array_type->data.base_info.dimensions[0] = size;
+
+                // If the element type itself was already an array, copy its dimensions
+                if (current_type->kind == TYPE_ARRAY && current_type->data.base_info.num_dimensions > 0) {
+                     if (1 + current_type->data.base_info.num_dimensions <= MAX_ARRAY_DIMENSIONS) {
+                         new_array_type->data.base_info.num_dimensions += current_type->data.base_info.num_dimensions;
+                         for (int i = 0; i < current_type->data.base_info.num_dimensions; ++i) {
+                             new_array_type->data.base_info.dimensions[i + 1] = current_type->data.base_info.dimensions[i];
+                         }
+                     } else {
+                          fprintf(stderr, "Semantic Error line %d: Exceeded maximum array dimensions (%d).\n", current->lineno, MAX_ARRAY_DIMENSIONS);
+                          semantic_errors++;
+                     }
+                }
+
+                current_type = new_array_type; // Update current_type to the new array type
+                current = current->data.array_declarator.base_declarator;
+                break;
+            }
+            case NODE_FUNCTION_DECLARATOR: {
+                // Function declarators modify the type *around* the base type
+                Type* func_type = create_type(TYPE_FUNCTION);
+                func_type->data.function_sig.return_type = current_type; // Type built so far is return type
+                func_type->data.function_sig.params = current->data.function_declarator.parameters;
+                // TODO: Process parameter types within the function declarator node if needed here
+                current_type = func_type;
+                current = current->data.function_declarator.base_declarator;
+                break;
+            }
+            default: // Handle parentheses?
+                 current = NULL; // Stop if unexpected
+                 break;
+        }
+    }
+
+    final_type = current_type;
+    // Apply top-level qualifiers from base_type (like const int *...)
+    final_type->is_const = base_type->is_const;
+    final_type->is_unsigned = base_type->is_unsigned;
+    final_type->storage_class = base_type->storage_class;
+
     return final_type;
 }
 

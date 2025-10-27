@@ -4,6 +4,7 @@
 #include "ast.h"
 #include <stdbool.h>
 
+#define MAX_ARRAY_DIMENSIONS 10
 // Enum for basic type kinds
 typedef enum {
     TYPE_UNKNOWN = 0,
@@ -43,7 +44,11 @@ struct Type {
     int storage_class;  // to store STATIC, EXTERN, etc.
 
     union {
-        struct { Type* base; } base_info;
+        struct {
+            Type* base;
+            int dimensions[MAX_ARRAY_DIMENSIONS]; // Store dimension sizes here
+            int num_dimensions;                   // Number of valid dimensions stored
+        } base_info;
 
         // For functions
         struct {

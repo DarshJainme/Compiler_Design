@@ -155,63 +155,94 @@ void find_all_labels_in_body(ASTNode* node) {
     }
 }
 
-TacAddr* calculate_array_offset(ASTNode* node, Type* current_type, TacAddr** out_element_type_addr) {
-    if (!node || node->type != NODE_ARRAY_SUBSCRIPT) {
-        // Base case: We've reached the innermost identifier or pointer
-        *out_element_type_addr = gen_tac_for_expr(node, false); // Get base address
-        return new_const_int(0); // Initial offset is 0
+// Calculates the *byte offset* for an array element access recursively.
+// base_node: The AST node representing the base array/pointer identifier.
+// subscript_nodes: A list of AST nodes representing the subscript expressions [idxN-1]...[idx1][idx0].
+// num_subscripts: The total number of subscripts applied.
+// current_dim_index: The index of the dimension currently being processed (starts at 0 for outermost).
+// array_type: The full Type* of the base array (e.g., int[2][3]).
+// Returns a TacAddr* (temporary or constant) holding the final byte offset.
+TacAddr* calculate_array_offset_recursive_new(ASTNode* base_node, ASTNodeList* subscript_nodes, int num_subscripts, int current_dim_index, Type* array_type) {
+
+    if (current_dim_index >= num_subscripts) {
+        // Base case: all dimensions processed, initial offset is 0.
+        return new_const_int(0);
     }
 
-    // Recursive step: Calculate offset for outer dimensions first
-    TacAddr* base_or_parent_addr = NULL; // Address from the level above
-    TacAddr* outer_offset = calculate_array_offset(node->data.array_subscript.array, current_type, &base_or_parent_addr);
-    if (!outer_offset || !base_or_parent_addr || !base_or_parent_addr->type) return NULL; // Error in recursion
+    // Get the AST node for the current subscript expression
+    ASTNodeList* current_subscript_item = subscript_nodes;
+    for (int i = 0; i < current_dim_index; ++i) {
+        if (!current_subscript_item) return NULL; // Should not happen
+        current_subscript_item = current_subscript_item->next;
+    }
+    ASTNode* index_node = current_subscript_item ? current_subscript_item->node : NULL;
+    if (!index_node) return NULL;
 
-    Type* array_or_ptr_type = base_or_parent_addr->type;
-    Type* element_type = NULL;
+    // Get the size of the subarray/element for the *next* dimension
+    int stride = 0;
+    Type* sub_array_type = array_type; // Type for the current dimension level
 
-    if (array_or_ptr_type->kind == TYPE_ARRAY) {
-        element_type = array_or_ptr_type->data.base_info.base;
-         // --- NEED DIMENSION INFO HERE ---
-         // int num_cols = array_or_ptr_type->data.array_info.dimension; // Get next dimension size
-         // This requires storing dimensions in your Type struct during semantic analysis!
-         fprintf(stderr,"Warning line %d: Multidimensional array offset calculation requires dimension info in Type struct (assuming flat layout).\n", node->lineno);
-         // Without dimension info, we can only correctly handle pointers or 1D arrays
-         if (array_or_ptr_type->data.base_info.base->kind == TYPE_ARRAY) {
-              fprintf(stderr, "Error line %d: Cannot calculate offset for multi-D array without dimension sizes.\n", node->lineno);
+    if (sub_array_type->kind == TYPE_ARRAY) {
+         if (current_dim_index < sub_array_type->data.base_info.num_dimensions) {
+             // Calculate the size of one element in the current dimension
+             // This is the size of the base type multiplied by all subsequent dimension sizes
+             stride = get_type_size(sub_array_type->data.base_info.base); // Start with base element size
+             for (int d = current_dim_index + 1; d < sub_array_type->data.base_info.num_dimensions; ++d) {
+                  int dim_size = sub_array_type->data.base_info.dimensions[d];
+                  if (dim_size <= 0) {
+                      fprintf(stderr, "Error line %d: Array dimension size missing or invalid for offset calculation (dim %d).\n", index_node->lineno, d);
+                      return NULL;
+                  }
+                  stride *= dim_size;
+             }
+         } else {
+              fprintf(stderr, "Error line %d: Too many dimensions used in array access.\n", index_node->lineno);
               return NULL;
          }
-         // --- END DIMENSION REQUIREMENT ---
+    } else if (sub_array_type->kind == TYPE_POINTER && current_dim_index == 0) {
+        // If the base is a pointer (e.g., int *p; p[i]), the stride is the size of the pointed-to type.
+        stride = get_type_size(sub_array_type->data.base_info.base);
+    }
+     else {
+         fprintf(stderr, "Error line %d: Subscript applied to non-array/non-pointer type '%s' at dimension %d.\n", index_node->lineno, type_to_string(sub_array_type), current_dim_index);
+         return NULL;
+     }
 
-    } else if (array_or_ptr_type->kind == TYPE_POINTER) {
-        element_type = array_or_ptr_type->data.base_info.base;
-    } else {
-        fprintf(stderr, "Error line %d: Subscript applied to non-array/non-pointer type '%s'.\n", node->lineno, type_to_string(array_or_ptr_type));
+    if (stride <= 0) {
+        fprintf(stderr, "Error line %d: Cannot determine stride for array offset calculation (element size might be zero or incomplete).\n", index_node->lineno);
         return NULL;
     }
 
-    if (!element_type) return NULL;
-    int element_size = get_type_size(element_type);
-    if (element_size <= 0) { /* Error or Warning */ element_size = 1; }
 
-    // Calculate offset for the current index
-    TacAddr* index_val = gen_tac_for_expr(node->data.array_subscript.index, false);
+    // Generate TAC for the current index expression
+    TacAddr* index_val = gen_tac_for_expr(index_node, false);
     if (!index_val) return NULL;
 
-    TacAddr* current_offset = new_temp(create_type(TYPE_INT));
-    emit(TAC_MUL, current_offset, index_val, new_const_int(element_size));
+    // Calculate offset for this dimension: index_val * stride
+    TacAddr* current_dim_offset = new_temp(create_type(TYPE_INT)); // Offset is integer
+    emit(TAC_MUL, current_dim_offset, index_val, new_const_int(stride));
 
-    // Add outer offset to current offset
+    // Recursively calculate offset for inner dimensions
+    TacAddr* inner_offset = calculate_array_offset_recursive_new(base_node, subscript_nodes, num_subscripts, current_dim_index + 1, array_type);
+    if (!inner_offset) return NULL;
+
+    // Total offset = current_dim_offset + inner_offset
     TacAddr* total_offset = new_temp(create_type(TYPE_INT));
-    emit(TAC_ADD, total_offset, outer_offset, current_offset);
+    emit(TAC_ADD, total_offset, current_dim_offset, inner_offset);
 
-    *out_element_type_addr = base_or_parent_addr; // Pass base address up
     return total_offset;
 }
 
 /* --- Type Size Helper (Simplified) --- */
 int get_type_size(Type* type) {
     if (!type) return 0;
+
+    // --- NEW: Handle potential typedefs ---
+    // If the type name comes from a typedef, we need the underlying type size.
+    // This requires the symbol table info, which we don't have here.
+    // The type passed SHOULD ideally be the resolved base type after semantic analysis.
+    // If semantic analysis stored the resolved type correctly, this works.
+
     switch(type->kind) {
         case TYPE_VOID:   return 0;
         case TYPE_BOOL:
@@ -219,37 +250,81 @@ int get_type_size(Type* type) {
         case TYPE_SHORT:  return 2;
         case TYPE_INT:
         case TYPE_FLOAT:
-        case TYPE_ENUM:   return 4; // Assuming 4 bytes
+        case TYPE_ENUM:   return 4; // Assuming 4 bytes for enums (usually int)
         case TYPE_LONG:
         case TYPE_DOUBLE: return 8; // Assuming 8 bytes
         case TYPE_POINTER:
         case TYPE_REFERENCE:
-        case TYPE_STRING: // Store pointer to string literal
-                          return 8; // Assuming 64-bit pointers
+        case TYPE_STRING: // Represents char* essentially
+        case TYPE_FUNCTION: // Size of function pointer
+                          return 8; // Assuming 64-bit architecture
+
         case TYPE_ARRAY: {
-            // Need size information stored in Type struct for accurate calculation
-            // int size = type->data.array_info.size; // Assuming size is stored
-            // if (size <= 0) size = 1; // Default size if unknown? Problematic.
-            // return size * get_type_size(type->data.base_info.base);
-            fprintf(stderr, "Warning: Size calculation for arrays not fully implemented.\n");
-            return get_type_size(type->data.base_info.base); // Return element size only for now
+            // --- FULL ARRAY SIZE CALCULATION ---
+            if (type->data.base_info.num_dimensions == 0) {
+                 fprintf(stderr, "Warning: Cannot calculate size of array with no dimensions specified.\n");
+                 return 0; // Or return base size? Returning 0 is safer.
+            }
+
+            int base_element_size = get_type_size(type->data.base_info.base);
+            if (base_element_size == 0 && type->data.base_info.base->kind != TYPE_VOID) {
+                // If base size is 0 (and not void), likely an incomplete type (e.g., struct declared but not defined)
+                fprintf(stderr, "Warning: Cannot calculate size of array of incomplete type '%s'.\n", type_to_string(type->data.base_info.base));
+                return 0;
+            }
+
+            int total_size = base_element_size;
+            for (int i = 0; i < type->data.base_info.num_dimensions; ++i) {
+                int dim_size = type->data.base_info.dimensions[i];
+                if (dim_size <= 0) {
+                     fprintf(stderr, "Warning: Cannot calculate size of array with unspecified or zero dimension (dimension %d).\n", i);
+                     // This is valid C for function parameters or extern declarations,
+                     // but we can't get a total size.
+                     return 0;
+                }
+                total_size *= dim_size;
+            }
+            return total_size;
+            // --- END ARRAY CALCULATION ---
         }
-        case TYPE_STRUCT:
-        case TYPE_UNION: {
-             // Calculate size based on members (simplified, no padding/alignment)
+        case TYPE_STRUCT: {
+             // --- STRUCT SIZE CALCULATION (with basic alignment) ---
              int size = 0;
+             int max_alignment = 1;
+             for (Member* m = type->data.struct_union_info.members; m; m = m->next) {
+                 int member_size = get_type_size(m->type);
+                 int member_alignment = member_size; // Simplified: align to size
+                 if (member_alignment > max_alignment) max_alignment = member_alignment;
+
+                 // Add padding before member if needed
+                 if (size % member_alignment != 0) {
+                     size += member_alignment - (size % member_alignment);
+                 }
+                 size += member_size;
+             }
+             // Add padding at the end of the struct for array alignment
+             if (max_alignment > 0 && size % max_alignment != 0) {
+                 size += max_alignment - (size % max_alignment);
+             }
+             return size > 0 ? size : 1; // Structs usually have min size 1
+             // --- END STRUCT CALCULATION ---
+        }
+        case TYPE_UNION: {
+             // --- UNION SIZE CALCULATION ---
              int max_member_size = 0;
              for (Member* m = type->data.struct_union_info.members; m; m = m->next) {
                  int member_size = get_type_size(m->type);
-                 if (type->kind == TYPE_UNION) {
-                     if (member_size > max_member_size) max_member_size = member_size;
-                 } else { // Struct
-                     size += member_size;
+                 if (member_size > max_member_size) {
+                     max_member_size = member_size;
                  }
              }
-             return (type->kind == TYPE_UNION) ? max_member_size : size;
+             // Union size also needs alignment, typically to the largest member's alignment
+             return max_member_size > 0 ? max_member_size : 1; // Unions usually have min size 1
+             // --- END UNION CALCULATION ---
         }
-        default: return 0;
+        default:
+             fprintf(stderr, "Warning: Cannot determine size for type kind %d.\n", type->kind);
+             return 0;
     }
 }
 
@@ -616,14 +691,13 @@ void print_tac() {
                    printf(" = ");
                    print_addr(instr->arg1); // The value to store
                    break;
-                case TAC_RETURN: 
-                    if (instr->res) {
-                        printf("return ");
-                        print_addr(instr->res);
-                    } else {
-                        printf("return");
+                case TAC_RETURN:
+                    printf("return");
+                    if (instr->arg1) { // --- FIX: Check arg1 for return value ---
+                        printf(" ");
+                        print_addr(instr->arg1);
                     }
-                     break;
+                    break;
                 case TAC_PARAM: printf("param "); print_addr(instr->arg1); break;
                 case TAC_CALL:
                     if (instr->res) { print_addr(instr->res); printf(" = "); }
@@ -654,58 +728,89 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue);
 void gen_tac_for_condition(ASTNode* node, TacAddr* true_label, TacAddr* false_label);
 TacAddr* emit_conversion(TacAddr* source_addr, Type* target_type);
 
-void gen_tac_for_initializer_list(TacAddr* base_addr, Type* base_type, ASTNode* initializer) {
+void gen_tac_for_initializer_list(TacAddr* base_addr, Type* aggregate_type, ASTNode* initializer) {
     if (!initializer || initializer->type != NODE_INITIALIZER_LIST) {
-        fprintf(stderr, "Error: Expected initializer list.\n"); // Should ideally have lineno
+        // Allow single expression to initialize first element of struct/array? C++ allows this. C99 does for first member.
+        // Let's stick to requiring braces for aggregates for now.
+        fprintf(stderr, "Error line %d: Expected initializer list '{...}' for aggregate type '%s'.\n", initializer ? initializer->lineno : 0, type_to_string(aggregate_type));
         return;
     }
-    if (!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_STRUCT)) {
-         fprintf(stderr, "Error: Initializer list target is not array or struct.\n");
+    if (!aggregate_type || (aggregate_type->kind != TYPE_ARRAY && aggregate_type->kind != TYPE_STRUCT && aggregate_type->kind != TYPE_UNION)) {
+         fprintf(stderr, "Error line %d: Initializer list target is not array, struct, or union.\n", initializer->lineno);
+         return;
+    }
+    // Cannot initialize unions with initializer lists directly in this manner easily
+    if (aggregate_type->kind == TYPE_UNION) {
+         fprintf(stderr, "Error line %d: Cannot use initializer list for unions directly (initialize first member instead).\n", initializer->lineno);
          return;
     }
 
-    int index = 0;
-    Type* elem_type = NULL;
-    int elem_size = 0;
+    int index = 0; // Tracks current element index for arrays
+    Member* current_member = (aggregate_type->kind == TYPE_STRUCT) ? aggregate_type->data.struct_union_info.members : NULL;
+    int current_struct_offset = 0; // Tracks current byte offset within struct (for padding)
 
-    if (base_type->kind == TYPE_ARRAY) {
-        elem_type = base_type->data.base_info.base;
-        elem_size = get_type_size(elem_type);
-         if (elem_size <= 0) {
-             fprintf(stderr, "Warning: Cannot determine element size for array initializer.\n");
-             elem_size = 1; // Failsafe, likely wrong
-         }
-    } else { // Struct
-        // We'd need to iterate through struct members simultaneously
-        fprintf(stderr, "Warning: TAC generation for struct initializers not fully implemented.\n");
-        return; // Simplification: Skip struct initializers for now
-    }
+    for (ASTNodeList* item = initializer->data.items_list; item; item = item->next) {
+        ASTNode* current_init_node = item->node;
+        Type* elem_type = NULL;
+        int elem_offset = 0; // Byte offset from base_addr for this element
+        int elem_alignment = 1; // Required alignment for this element
 
+        if (aggregate_type->kind == TYPE_ARRAY) {
+            elem_type = aggregate_type->data.base_info.base;
+            if (!elem_type) { /* Error */ continue; }
 
-    for (ASTNodeList* item = initializer->data.items_list; item; item = item->next, index++) {
-        TacAddr* current_elem_addr = base_addr; // Start with base for offset calculation
+            // --- CORRECTED OFFSET/STRIDE CALCULATION ---
+            int element_size_with_padding = get_type_size(elem_type); // Get full size including potential padding
+            if (element_size_with_padding <= 0 && elem_type->kind != TYPE_VOID) {
+                fprintf(stderr, "Error line %d: Cannot determine size of array element type '%s'.\n", current_init_node->lineno, type_to_string(elem_type));
+                return; // Cannot proceed
+            }
+            elem_offset = index * element_size_with_padding; // Offset = index * size_of_element_including_padding
+            // --- END CORRECTION ---
 
-        if (base_type->kind == TYPE_ARRAY) {
-            // Calculate address: base_addr + (index * elem_size)
-            TacAddr* offset = new_temp(create_type(TYPE_INT));
-            emit(TAC_MUL, offset, new_const_int(index), new_const_int(elem_size));
+            index++; // Increment index only for arrays
 
-            current_elem_addr = new_temp(create_pointer_type(elem_type));
-            emit(TAC_ADD, current_elem_addr, base_addr, offset);
+        } else { // Struct
+            if (!current_member) {
+                fprintf(stderr, "Warning line %d: Too many initializers for struct '%s'.\n", current_init_node->lineno, aggregate_type->data.struct_union_info.name ? aggregate_type->data.struct_union_info.name : "");
+                break;
+            }
+            elem_type = current_member->type;
+            if (!elem_type) { /* Error */ current_member = current_member->next; continue; }
+
+            // --- Calculate offset considering alignment ---
+            int member_size = get_type_size(elem_type);
+            elem_alignment = member_size; // Simple alignment
+            // Add padding BEFORE member
+            if (current_struct_offset % elem_alignment != 0) {
+                 current_struct_offset += elem_alignment - (current_struct_offset % elem_alignment);
+            }
+            elem_offset = current_struct_offset;
+            current_struct_offset += member_size; // Advance offset for next member
+            // --- End alignment ---
+
+            current_member = current_member->next;
         }
-        // else { // Struct - calculate offset based on member 'index' }
 
-        if (item->node->type == NODE_INITIALIZER_LIST) {
-            // Recursive call for nested lists (e.g., multidimensional arrays)
-            gen_tac_for_initializer_list(current_elem_addr, elem_type, item->node);
+        // Calculate address for the current element: base_addr + elem_offset
+        TacAddr* current_elem_addr = base_addr;
+        if (elem_offset != 0) { // Optimize: no ADD if offset is 0
+             current_elem_addr = new_temp(create_pointer_type(elem_type)); // Address is pointer to element
+             emit(TAC_ADD, current_elem_addr, base_addr, new_const_int(elem_offset));
+        }
+
+
+        if (current_init_node->type == NODE_INITIALIZER_LIST) {
+            // Recursive call for nested aggregates (arrays or structs)
+            gen_tac_for_initializer_list(current_elem_addr, elem_type, current_init_node);
         } else {
             // Generate value for the current element
-            TacAddr* rvalue = gen_tac_for_expr(item->node, false);
+            TacAddr* rvalue = gen_tac_for_expr(current_init_node, false);
             if (!rvalue) continue;
-            rvalue = emit_conversion(rvalue, elem_type);
+            rvalue = emit_conversion(rvalue, elem_type); // Convert initializer value if needed
 
-            // Store value
-            emit(TAC_STORE, current_elem_addr, rvalue, NULL); // *current_elem_addr = rvalue
+            // Store value: *(base_addr + elem_offset) = rvalue
+            emit(TAC_STORE, current_elem_addr, rvalue, NULL); // Use calculated address
         }
     }
 }
@@ -805,32 +910,34 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             return new_string_addr(node->data.stringValue);
 
         case NODE_IDENTIFIER: {
-            Symbol* sym = node->symbol;                      // <<<--- ADD THIS LINE (Get symbol from AST)
+            Symbol* sym = node->symbol; // <<<--- Get symbol directly from AST annotation
+
             if (!sym) {
-                // This should ideally not happen if semantic analysis ran correctly and annotated.
-                fprintf(stderr, "Compiler Internal Error (Line %d): AST node for '%s' was not annotated with symbol information.\n", node->lineno, node->data.stringValue);
-                // Attempt a global lookup as a fallback (might work for globals, not locals)
-                sym = find_symbol(node->data.stringValue);
-                 if (!sym) {
-                     fprintf(stderr, "Error line %d: Symbol '%s' not found during TAC generation (Fallback lookup failed).\n", node->lineno, node->data.stringValue);
-                     return NULL;
-                 }
-                 // If fallback worked, maybe log a warning?
+                // If the symbol is NULL here, it means semantic analysis failed to annotate it.
+                // This indicates a deeper issue, possibly in scope handling during semantic analysis
+                // or in the annotation logic itself (e.g., for parameters).
+                fprintf(stderr, "Compiler Internal Error (Line %d): AST node for identifier '%s' was not annotated with symbol information. Semantic analysis phase likely incomplete for this node.\n",
+                        node->lineno, node->data.stringValue);
+                return NULL; // Cannot proceed without symbol info
             }
 
-            TacAddr* var_addr = new_var_addr(sym); // This now uses the correct symbol
+            TacAddr* var_addr = new_var_addr(sym); // Use the symbol found via annotation
 
             if (is_lvalue) {
+                // We need the address of the variable.
                 TacAddr* result_addr = new_temp(create_pointer_type(var_addr->type));
                 emit(TAC_ADDR, result_addr, var_addr, NULL); // result_addr = &var_addr
                 return result_addr;
             }
             else {
-                if (var_addr->type->kind == TYPE_ARRAY || var_addr->type->kind == TYPE_FUNCTION) {
+                // If we need the value, handle array/function decay to pointer.
+                if (var_addr->type && (var_addr->type->kind == TYPE_ARRAY || var_addr->type->kind == TYPE_FUNCTION)) {
                     TacAddr* result_addr = new_temp(create_pointer_type(var_addr->type));
-                    emit(TAC_ADDR, result_addr, var_addr, NULL);
+                    emit(TAC_ADDR, result_addr, var_addr, NULL); // Emit address for arrays/functions
                     return result_addr;
                 }
+                 // For simple variables (int, float, ptrs), return the var_addr itself.
+                 // TAC operations like ADD will treat it as a value.
                 return var_addr;
             }
         }
@@ -1138,33 +1245,74 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
          }
 
         case NODE_ARRAY_SUBSCRIPT: {
-            TacAddr* base_addr = NULL;
-            // Recursively calculate the total byte offset and get the original base address
-            TacAddr* total_offset = calculate_array_offset(node, NULL /* Initial type unused */, &base_addr);
+            // --- REVISED LOGIC FOR MULTIDIMENSIONAL ACCESS ---
+            // 1. Traverse inwards to find the base identifier/expression
+            ASTNode* base_expr_node = node;
+            ASTNodeList* subscript_list = NULL;
+            int num_subscripts = 0;
+            while (base_expr_node && base_expr_node->type == NODE_ARRAY_SUBSCRIPT) {
+                // Prepend index node to list (builds list in reverse order of access)
+                ASTNodeList* new_item = create_list_node(base_expr_node->data.array_subscript.index);
+                new_item->next = subscript_list;
+                subscript_list = new_item;
+                num_subscripts++;
+                base_expr_node = base_expr_node->data.array_subscript.array;
+            }
 
-            if (!total_offset || !base_addr || !base_addr->type) return NULL; // Error occurred
+            if (!base_expr_node) return NULL; // Should not happen
 
-            Type* final_element_type = base_addr->type;
-             // calculate_array_offset effectively peels off layers, so the type of base_addr
-             // needs to be adjusted based on the number of subscripts peeled.
-             // For now, let's assume calculate_array_offset correctly gives us the base
-             // and the effective final element type needs deducing.
-             ASTNode* temp_node = node;
-             while(temp_node && temp_node->type == NODE_ARRAY_SUBSCRIPT) {
-                 if (final_element_type && (final_element_type->kind == TYPE_ARRAY || final_element_type->kind == TYPE_POINTER)) {
-                     final_element_type = final_element_type->data.base_info.base;
-                 } else {
-                     fprintf(stderr, "Error line %d: Too many subscripts applied.\n", node->lineno);
-                     return NULL;
-                 }
-                 temp_node = temp_node->data.array_subscript.array;
+            // 2. Get the base address and the full type of the base array/pointer
+            TacAddr* base_addr = gen_tac_for_expr(base_expr_node, false); // Get base addr (e.g., &arr or ptr_value)
+            if (!base_addr || !base_addr->type) return NULL;
+
+            Type* base_type = base_addr->type;
+            Type* final_element_type = base_type; // Will hold type after all subscripts
+
+            // Adjust base_addr and base_type if the base itself is an array (array decay)
+             TacAddr* effective_base_addr = base_addr;
+             if (base_type->kind == TYPE_ARRAY) {
+                 // The address of the array is its base address.
+                 effective_base_addr = new_temp(create_pointer_type(base_type->data.base_info.base));
+                 emit(TAC_ADDR, effective_base_addr, base_addr, NULL); // Get address if base_addr was just the symbol
+                 final_element_type = base_type; // Start with full array type for offset calc
+             } else if (base_type->kind == TYPE_POINTER) {
+                 // Base address is already the pointer value.
+                 effective_base_addr = base_addr;
+                 final_element_type = base_type; // Start with pointer type for offset calc
+             } else {
+                 fprintf(stderr, "Error line %d: Base of array subscript is not an array or pointer.\n", node->lineno);
+                 // Free subscript_list before returning
+                 while (subscript_list) { ASTNodeList* next = subscript_list->next; free(subscript_list); subscript_list = next; }
+                 return NULL;
              }
-             if (!final_element_type) return NULL; // Should have element type
 
 
-            // Calculate the final address: base_addr + total_offset
+            // 3. Calculate the total byte offset using the new recursive function
+            TacAddr* total_offset = calculate_array_offset_recursive_new(base_expr_node, subscript_list, num_subscripts, 0, final_element_type);
+
+             // Update final_element_type based on dimensions applied
+             for(int i=0; i < num_subscripts; ++i) {
+                  if (final_element_type && (final_element_type->kind == TYPE_ARRAY || final_element_type->kind == TYPE_POINTER)) {
+                     final_element_type = final_element_type->data.base_info.base;
+                  } else {
+                      final_element_type = create_type(TYPE_UNKNOWN); // Error occurred
+                      break;
+                  }
+             }
+
+
+            // Free the temporary list used for subscripts
+            while (subscript_list) { ASTNodeList* next = subscript_list->next; free(subscript_list); subscript_list = next; }
+
+            if (!total_offset || !final_element_type || final_element_type->kind == TYPE_UNKNOWN) {
+                 fprintf(stderr, "Error line %d: Failed to calculate array offset or determine element type.\n", node->lineno);
+                 return NULL;
+            }
+
+
+            // 4. Calculate the final element address: effective_base_addr + total_offset
             TacAddr* element_addr = new_temp(create_pointer_type(final_element_type));
-            emit(TAC_ADD, element_addr, base_addr, total_offset); // element_addr = base_addr + total_offset
+            emit(TAC_ADD, element_addr, effective_base_addr, total_offset); // element_addr = base + offset
 
             if (is_lvalue) {
                 return element_addr; // Return the calculated address
@@ -1174,6 +1322,7 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 emit(TAC_DEREF, result, element_addr, NULL); // result = *element_addr
                 return result;
             }
+            // --- END REVISED LOGIC ---
         }
 
         case NODE_MEMBER_ACCESS: {
@@ -1231,33 +1380,37 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             Type* target_type = NULL;
             if (node->data.cast_expr.type_name && node->data.cast_expr.type_name->type == NODE_DECLARATION) {
                  target_type = get_type_from_specifiers(node->data.cast_expr.type_name->data.declaration.specifiers);
-            } 
-            // --- THIS IS THE FIX for semantic-generated casts ---
+            }
             else if (node->data.cast_expr.type_name && node->data.cast_expr.type_name->type == NODE_TYPENAME) {
-                // HACK: Handle casts inserted by semantic analyzer
-                // This is brittle. `type_to_string` must be simple.
                 char* type_str = node->data.cast_expr.type_name->data.stringValue;
+                // Basic type matching
                 if (strcmp(type_str, "int") == 0) target_type = create_type(TYPE_INT);
                 else if (strcmp(type_str, "float") == 0) target_type = create_type(TYPE_FLOAT);
                 else if (strcmp(type_str, "double") == 0) target_type = create_type(TYPE_DOUBLE);
                 else if (strcmp(type_str, "char") == 0) target_type = create_type(TYPE_CHAR);
                 else if (strcmp(type_str, "bool") == 0) target_type = create_type(TYPE_BOOL);
-                // This won't handle "int*" but it will fix implicit arithmetic casts
-            } 
-            // --- END FIX ---
+                // --- FIX: Handle char[] as char* ---
+                else if (strcmp(type_str, "char[]") == 0) {
+                     target_type = create_pointer_type(create_type(TYPE_CHAR));
+                }
+                // --- END FIX ---
+                // Add more complex pointer/array types if needed
+            }
             else {
                  fprintf(stderr, "Error line %d: Invalid type specified in cast.\n", node->lineno);
                  return new_temp(create_type(TYPE_UNKNOWN));
             }
 
             if (!target_type) { // Fallback if string didn't match
-                fprintf(stderr, "Error line %d: Unhandled cast type '%s'.\n", node->lineno, 
+                fprintf(stderr, "Error line %d: Unhandled cast type '%s'.\n", node->lineno,
                     node->data.cast_expr.type_name->type == NODE_TYPENAME ? node->data.cast_expr.type_name->data.stringValue : "complex_type");
                 return expr_val; // Return unconverted
             }
 
             TacAddr* result = emit_conversion(expr_val, target_type);
-            if (target_type) free(target_type);
+            // Don't free target_type here, emit_conversion might use it or copy it.
+            // Memory management of types needs careful review.
+            // free(target_type); // Potential double free if copy_type used internally
             return result;
         }
 
@@ -1573,17 +1726,18 @@ void gen_tac_for_node(ASTNode* node) {
         case NODE_RETURN_STATEMENT: {
             TacAddr* retval = NULL;
             if (node->data.return_statement.expression) {
-                // --- FIX: Ensure expression is generated ---
                 retval = gen_tac_for_expr(node->data.return_statement.expression, false);
-                // The semantic analyzer should ensure type compatibility/insert casts
                  if (!retval) {
                      fprintf(stderr, "Error line %d: Failed to generate TAC for return expression.\n", node->lineno);
-                     // Optionally emit return without value or handle error
+                     // Emit return without value as fallback?
+                     emit(TAC_RETURN, NULL /* No result reg needed */, NULL /* No value */, NULL);
+                 } else {
+                     // --- FIX: Pass return value as ARG1 ---
+                     emit(TAC_RETURN, NULL /* No result reg needed */, retval /* Value to return */, NULL);
                  }
-                // --- END FIX ---
+            } else {
+                 emit(TAC_RETURN, NULL, NULL, NULL); // Void return
             }
-            // Store return value (or NULL) in `res` field
-            emit(TAC_RETURN, retval, NULL, NULL);
             break;
         }
 

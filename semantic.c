@@ -26,23 +26,33 @@ ASTNode* find_identifier_in_declarator(ASTNode* declarator) {
         switch (current->type) {
             case NODE_IDENTIFIER:
                 return current; // Found it
+
+            // Handle potential nesting/wrapping
             case NODE_POINTER_DECLARATOR:
                 current = current->data.pointer_declarator.base_declarator;
                 break;
             case NODE_ARRAY_DECLARATOR:
                 current = current->data.array_declarator.base_declarator;
                 break;
-            case NODE_FUNCTION_DECLARATOR: // Should not happen *within* a param declarator usually
+            case NODE_FUNCTION_DECLARATOR:
                 current = current->data.function_declarator.base_declarator;
                 break;
              case NODE_REFERENCE_DECLARATOR:
                  current = current->data.reference_declarator.base_declarator;
                  break;
+            case NODE_QUALIFIED_ID: // If used directly in declarator (less common)
+                // The actual identifier is deeper
+                current = current->data.qualified_id.identifier;
+                // We restart the loop logic essentially for the inner node
+                continue;
             default:
-                return NULL; // Not found or unknown type
+                // If it's none of the above, we can't traverse further down this path.
+                // This might happen with abstract declarators or complex nested structures.
+                // For finding the *name*, this path failed.
+                return NULL;
         }
     }
-    return NULL;
+    return NULL; // Return NULL if no identifier was ultimately found
 }
 
 void analyze_enum_specifier(ASTNode *node) {
@@ -467,37 +477,89 @@ Type* infer_constant_type(const char* val) {
     return int_type;
 }
 
-// Recursively check array initializer
-int check_array_initializer(Type *array_type, ASTNode *initializer)
-{
-    if (!array_type || array_type->kind != TYPE_ARRAY)
-        return 0;
-    if (!initializer)
-        return 1;
-    if (initializer->type == NODE_INITIALIZER_LIST)
-    {
+// Recursively check array initializer list against array type
+// Returns 1 if compatible, 0 otherwise.
+int check_array_initializer(Type *array_type, ASTNode *initializer) {
+    if (!array_type || array_type->kind != TYPE_ARRAY) {
+        fprintf(stderr, "Internal Compiler Error: check_array_initializer called with non-array type.\n");
+        return 0; // Should not happen if called correctly
+    }
+    if (!initializer) {
+        return 1; // Empty initializer is okay (results in zero-initialization)
+    }
+
+    Type* element_type = array_type->data.base_info.base;
+
+    if (initializer->type == NODE_INITIALIZER_LIST) {
         ASTNodeList *elems = initializer->data.items_list;
-        for (ASTNodeList *e = elems; e; e = e->next)
-        {
-            if (array_type->data.base_info.base->kind == TYPE_ARRAY)
-            {
-                if (!check_array_initializer(array_type->data.base_info.base, e->node))
+        int element_count = 0;
+        for (ASTNodeList *e = elems; e; e = e->next) {
+            element_count++;
+            // Check current element e->node against element_type
+
+            if (element_type->kind == TYPE_ARRAY) {
+                // Expecting a nested list or a compatible element for the inner array
+                if (e->node->type == NODE_INITIALIZER_LIST) {
+                    if (!check_array_initializer(element_type, e->node)) {
+                        return 0; // Recursive check failed
+                    }
+                } else {
+                     // Allow initializing array with flat list? C allows this sometimes.
+                     // For simplicity, let's require nested lists for nested arrays for now.
+                     // A more complex check could flatten the list.
+                     // OR, maybe this element is being assigned to the first element of the sub-array?
+                     // Let's analyze the type of the single element provided.
+                     Type *single_elem_type = analyze_expression(e->node);
+                     if (!are_types_compatible(element_type->data.base_info.base, single_elem_type)) {
+                           fprintf(stderr, "Semantic Error (Line %d): Initializer element type '%s' incompatible with array element type '%s'.\n",
+                                   e->node->lineno, type_to_string(single_elem_type), type_to_string(element_type->data.base_info.base));
+                           // semantic_errors++; // Let the caller increment
+                           return 0;
+                     }
+                     // This is tricky - how many elements does this single value initialize? Only the first?
+                     // Standard C might require braces for sub-aggregates. Let's enforce that.
+                      fprintf(stderr, "Semantic Error (Line %d): Missing braces for sub-array initializer.\n", e->node->lineno);
+                      // semantic_errors++;
+                      return 0;
+                }
+            } else {
+                // Expecting a single element compatible with element_type
+                if (e->node->type == NODE_INITIALIZER_LIST) {
+                     fprintf(stderr, "Semantic Error (Line %d): Braces around scalar initializer.\n", e->node->lineno);
+                    // semantic_errors++;
                     return 0;
-            }
-            else
-            {
-                Type *elem_type = analyze_expression(e->node);
-                if (!are_types_compatible(array_type->data.base_info.base, elem_type))
-                    return 0;
+                }
+                Type *elem_init_type = analyze_expression(e->node);
+                if (!are_types_compatible(element_type, elem_init_type)) {
+                    fprintf(stderr, "Semantic Error (Line %d): Initializer element type '%s' incompatible with array element type '%s'.\n",
+                           e->node->lineno, type_to_string(elem_init_type), type_to_string(element_type));
+                   // semantic_errors++;
+                   return 0;
+                }
+                 // If compatible but different, insert cast
+                 else if (element_type->kind != elem_init_type->kind && elem_init_type->kind != TYPE_UNKNOWN) {
+                      e->node = create_cast_expr_node(create_typename_node(type_to_string(element_type)), e->node);
+                 }
             }
         }
-        return 1;
+        // Optional: Check if element_count exceeds array_type->data.base_info.dimensions[0] if known
+        // if (array_type->data.base_info.num_dimensions > 0 && array_type->data.base_info.dimensions[0] > 0 && element_count > array_type->data.base_info.dimensions[0]) {
+        //      fprintf(stderr, "Semantic Error (Line %d): Excess elements in array initializer.\n", initializer->lineno);
+        //      // semantic_errors++; // Let the caller increment
+        //      return 0;
+        // }
+        return 1; // All elements checked okay
     }
-    else
-    {
-        // Single value for array
-        Type *elem_type = analyze_expression(initializer);
-        return are_types_compatible(array_type->data.base_info.base, elem_type);
+     else if (array_type->data.base_info.base->kind == TYPE_CHAR && initializer->type == NODE_STRING_LITERAL) {
+         // Special case: char arr[] = "string";
+         // Optional: Check if string length exceeds array size if known.
+         return 1;
+     }
+    else {
+        // Trying to initialize an array with a single non-list value (invalid)
+        fprintf(stderr, "Semantic Error (Line %d): Array initializer must be an initializer list or string literal.\n", initializer->lineno);
+        // semantic_errors++;
+        return 0;
     }
 }
 
@@ -674,42 +736,46 @@ void add_function_parameters(ASTNode *declarator)
     while (current) {
         if (current->type == NODE_FUNCTION_DECLARATOR) {
             ASTNodeList *params = current->data.function_declarator.parameters;
+            if (!params) return; // no parameters to add
             for (ASTNodeList *p = params; p; p = p->next) {
-                ASTNode *param_decl_node = p->node; // Renamed to avoid confusion
-                if (!param_decl_node || param_decl_node->type != NODE_PARAMETER_DECLARATION) continue; // Safety check
+                ASTNode *param_decl_node = p->node; // parameter_declaration node
+                if (!param_decl_node || param_decl_node->type != NODE_PARAMETER_DECLARATION) continue; // Safety
 
-                Type *param_type = get_type_from_specifiers(param_decl_node->data.parameter_declaration.specifiers);
+                // Determine the declared base type from specifiers
+                Type *param_base_type = get_type_from_specifiers(param_decl_node->data.parameter_declaration.specifiers);
                 ASTNode* param_declarator = param_decl_node->data.parameter_declaration.declarator;
 
+                // If there's a declarator, build the full type from it; otherwise the base type is the param type
+                Type *final_type = NULL;
                 if (param_declarator) {
-                    param_type = build_type_from_declarator(param_type, param_declarator);
-                    const char *pname = get_name_from_declarator(param_declarator);
-                    if (pname) {
-                        Symbol* sym = add_symbol(pname, param_type, SYM_VARIABLE, param_decl_node->lineno);
-
-                        // --- FIX: Annotate the parameter's identifier node ---
-                        if (sym) {
-                            ASTNode* id_node = find_identifier_in_declarator(param_declarator);
-                            if (id_node) {
-                                id_node->symbol = sym; // Attach symbol info
-                            } else {
-                                fprintf(stderr, "Warning line %d: Could not find identifier node for parameter '%s' to annotate.\n", param_decl_node->lineno, pname);
-                            }
-                        }
-                        // --- END FIX ---
-                    }
-                     else {
-                         // Abstract declarator (e.g., `int func(int *)`) - no name to add/annotate
-                         free(param_type); // Free the built type if not used
-                     }
+                    final_type = build_type_from_declarator(param_base_type, param_declarator);
                 } else {
-                     // No declarator (e.g., `int func(int)`) - add symbol without name? Or ignore?
-                     // C allows unnamed parameters. For symbol table, we might skip or give a placeholder.
-                     // For TAC, it's not directly addressable by name.
-                     free(param_type); // Free the base type if not used
+                    final_type = param_base_type;
+                }
+
+                // Get the parameter name (if any). Some parameters may be unnamed (e.g., in prototypes).
+                const char *param_name = get_name_from_declarator(param_declarator);
+                if (!param_name) {
+                    // No name -> nothing to add to symbol table for this parameter
+                    // Freeing final_type is intentionally left to caller/overall memory management
+                    continue;
+                }
+
+                // Add symbol to the current scope as a variable (parameter)
+                Symbol *sym = add_symbol(param_name, final_type, SYM_VARIABLE, param_decl_node->lineno);
+                if (!sym) {
+                    // add_symbol reports semantic error (redefinition); still try to annotate AST if possible
+                    // But don't crash: continue to next param
+                    continue;
+                }
+
+                // Annotate the AST identifier node within the declarator so later passes can use node->symbol
+                ASTNode *ident_node = find_identifier_in_declarator(param_declarator);
+                if (ident_node && ident_node->type == NODE_IDENTIFIER) {
+                    ident_node->symbol = sym;
                 }
             }
-            break; // Found the function declarator, processed params
+            break; // processed parameters
         }
         // Traverse down if nested (e.g., pointer to function)
         else if (current->type == NODE_POINTER_DECLARATOR) {
