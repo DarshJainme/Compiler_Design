@@ -1211,6 +1211,24 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                      return NULL;
                 }
                 func_addr = new_var_addr(func_expr_node->symbol);
+            } else {
+                // It is a normal C-style call (e.g. factorial(5))
+                
+                // If it's a direct call to a function (like 'factorial'), the node is an identifier
+                // with a symbol attached by the semantic analyzer.
+                if (func_expr_node->type == NODE_IDENTIFIER && func_expr_node->symbol) {
+                    // Directly use the symbol for the function. This avoids the extra "t = &func" step.
+                    func_addr = new_var_addr(func_expr_node->symbol);
+                } else {
+                    // For more complex cases (like calling a function pointer),
+                    // we still need to evaluate the expression to get the address.
+                    func_addr = gen_tac_for_expr(func_expr_node, false);
+                }
+            }
+
+            if (!func_addr) {
+                fprintf(stderr, "Compiler Error line %d: Could not resolve function address for call.\n", node->lineno);
+                return NULL;
             }
 
             // 3. Emit CALL instruction
