@@ -815,6 +815,70 @@ void gen_tac_for_initializer_list(TacAddr* base_addr, Type* aggregate_type, ASTN
     }
 }
 
+// NEW RECURSIVE INITIALIZER FUNCTION
+void gen_tac_for_init_list_recursive(TacAddr* base_addr, Type* current_type, ASTNodeList* items, int* current_byte_offset) {
+    if (!current_type || !items) return;
+
+    if (current_type->kind == TYPE_ARRAY) {
+        Type* element_type = current_type->data.base_info.base;
+        int element_size = get_type_size(element_type);
+        if (element_size == 0) {
+            fprintf(stderr, "Error: Cannot initialize array with elements of size 0.\n");
+            return;
+        }
+        int array_dim_size = current_type->data.base_info.dimensions[0]; // Size of this dimension
+        int elements_initialized = 0;
+
+        for (ASTNodeList* item = items; item; item = item->next) {
+            if (array_dim_size > 0 && elements_initialized >= array_dim_size) {
+                fprintf(stderr, "Warning line %d: Excess elements in array initializer.\n", item->node->lineno);
+                break; // Stop processing extra elements
+            }
+
+            if (item->node->type == NODE_INITIALIZER_LIST) {
+                // Recurse for nested array: e.g., int arr[2][2] = { {1,2}, ... }
+                // The type we process now is the element type (which is another array)
+                gen_tac_for_init_list_recursive(base_addr, element_type, item->node->data.items_list, current_byte_offset);
+            } else {
+                // This is a single value.
+                TacAddr* rvalue = gen_tac_for_expr(item->node, false);
+                if (!rvalue) continue;
+
+                // Calculate the final address for this element: base + offset
+                TacAddr* elem_addr = new_temp(create_pointer_type(element_type));
+                emit(TAC_ADD, elem_addr, base_addr, new_const_int(*current_byte_offset));
+
+                // Store the value
+                rvalue = emit_conversion(rvalue, element_type);
+                emit(TAC_STORE, elem_addr, rvalue, NULL);
+
+                // IMPORTANT: Increment the global byte offset
+                *current_byte_offset += element_size;
+            }
+            elements_initialized++;
+        }
+        // If an initializer list is shorter than the array dimension, the rest is implicitly zero.
+        // We need to advance the offset to the start of the next element/row.
+        int total_dimension_size_in_bytes = array_dim_size * element_size;
+        int initialized_size_in_bytes = elements_initialized * element_size;
+
+        // If we recursed, the offset was already advanced inside the recursive call.
+        // We only need to pad if the list was shorter than the dimension.
+        if (total_dimension_size_in_bytes > initialized_size_in_bytes) {
+             *current_byte_offset += (total_dimension_size_in_bytes - initialized_size_in_bytes);
+        }
+
+    } else if (current_type->kind == TYPE_STRUCT) {
+        // Similar logic for structs: iterate through members
+        Member* current_member = current_type->data.struct_union_info.members;
+        for (ASTNodeList* item = items; item && current_member; item = item->next, current_member = current_member->next) {
+             // This part can be implemented later using the same offset logic.
+             // For now, we focus on the array fix.
+             fprintf(stderr, "Warning: TAC generation for struct initializers is not fully implemented.\n");
+        }
+    }
+}
+
 /* --- TAC Generation from AST --- */
 
 void generate_tac(ASTNode* root) {
@@ -1616,8 +1680,9 @@ void gen_tac_for_node(ASTNode* node) {
                     if (!target_type) continue;
 
                     if (initializer->type == NODE_INITIALIZER_LIST) {
-                         // --- FIX FOR NESTED INITIALIZERS ---
-                        gen_tac_for_initializer_list(lvalue_addr, target_type, initializer);
+                         // --- FIX FOR NESTED INITIALIZERS
+                         int total_byte_offset = 0;
+                         gen_tac_for_init_list_recursive(lvalue_addr, target_type, initializer->data.items_list, &total_byte_offset);
                          // --- END FIX ---
                     } else {
                         TacAddr* rvalue = gen_tac_for_expr(initializer, false);

@@ -55,6 +55,7 @@ int main() {
         // default: printf("Invalid choice\n");
         case 1: break;
         case 2: break;
+        case 3: break;
         default: break;
     }
 
@@ -65,7 +66,7 @@ int main() {
     // printf("Character Array: %s\n", str);
 
     // multidimensional array
-    int matrix[2][3] = { {1, 2, 3}, {4, 5, 6} };
+    int matrix[3][3][3] = { {{1, 2, 3}, {4, 5, 6},{7,8,9}},{{1, 2, 3}, {4, 5, 6},{7,8,9}},{{1, 2, 3}, {4, 5, 6},{7,8,9}} };
     // printf("Matrix Element [1][2]: %d\n", matrix[1][2]);
 
     // 8. Pointers
