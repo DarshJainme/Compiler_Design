@@ -1850,82 +1850,96 @@ void gen_tac_for_node(ASTNode* node) {
              if (!switch_expr) return;
 
              TacAddr* end_label = new_label_addr();
-             TacAddr* default_label = end_label; // Default jumps to end if not specified
-             TacAddr* next_case_label = new_label_addr(); // Start checking first case
-             
-             // We need to store all case labels to generate the jump table
-             typedef struct CaseLabel {
-                 TacAddr* value_addr; // The constant value
-                 TacAddr* body_label; // The label for the case body
-                 struct CaseLabel* next;
-             } CaseLabel;
-             CaseLabel* case_list = NULL;
-             ASTNodeList* item;
-             
-             // --- Pass 1: Collect case labels and find default ---
-             for (item = node->data.switch_statement.body->data.compound_statement.items; item; item = item->next) {
-                 if (item->node->type == NODE_CASE_STATEMENT) {
-                    CaseLabel* new_case = calloc(1, sizeof(CaseLabel));
-                    new_case->value_addr = gen_tac_for_expr(item->node->data.case_statement.expression, false);
-                    new_case->body_label = new_label_addr();
-                    new_case->next = case_list;
-                    case_list = new_case; // Build list in reverse
-                 } else if (item->node->type == NODE_DEFAULT_STATEMENT) {
-                    default_label = new_label_addr();
+             TacAddr* default_label = NULL; // Will be assigned if a default case exists
+
+             // --- START OF FIX: Revised Switch Logic ---
+
+             // A structure to link case statements in the AST to their TAC labels
+             typedef struct CaseInfo {
+                 ASTNode* node;       // The NODE_CASE_STATEMENT or NODE_DEFAULT_STATEMENT
+                 TacAddr* body_label; // The TAC label for the start of its code
+                 struct CaseInfo* next;
+             } CaseInfo;
+
+             CaseInfo* case_info_list = NULL;
+             CaseInfo* case_info_tail = NULL;
+
+             ASTNodeList* body_items = node->data.switch_statement.body->data.compound_statement.items;
+
+             // --- Pass 1: Collect all case/default nodes and create labels IN ORDER ---
+             for (ASTNodeList* item = body_items; item; item = item->next) {
+                 if (item->node->type == NODE_CASE_STATEMENT || item->node->type == NODE_DEFAULT_STATEMENT) {
+                     CaseInfo* new_info = calloc(1, sizeof(CaseInfo));
+                     new_info->node = item->node;
+                     new_info->body_label = new_label_addr();
+                     new_info->next = NULL;
+
+                     if (item->node->type == NODE_DEFAULT_STATEMENT) {
+                         default_label = new_info->body_label;
+                     }
+
+                     // Append to list to maintain source order
+                     if (!case_info_list) {
+                         case_info_list = case_info_tail = new_info;
+                     } else {
+                         case_info_tail->next = new_info;
+                         case_info_tail = new_info;
+                     }
                  }
              }
 
-             push_control_flow(end_label, NULL); // break goes to end_label
-
-             // --- Pass 2: Emit jump table ---
-             emit(TAC_LABEL, next_case_label, NULL, NULL); // Start of switch logic
-             for (CaseLabel* c = case_list; c; c = c->next) {
-                 TacAddr* cmp_res = new_temp(create_type(TYPE_INT));
-                 emit(TAC_EQ, cmp_res, switch_expr, c->value_addr);
-                 emit(TAC_IFNZ, c->body_label, cmp_res, NULL); // If equal, jump to case body
+             // If no explicit default, the default action is to jump to the end
+             if (!default_label) {
+                 default_label = end_label;
              }
-             emit(TAC_GOTO, default_label, NULL, NULL); // If no case matched, go to default
 
-             // --- Pass 3: Emit case bodies ---
-             for (item = node->data.switch_statement.body->data.compound_statement.items; item; item = item->next) {
-                 if (item->node->type == NODE_CASE_STATEMENT) {
-                    // Find the corresponding label from our list
-                    TacAddr* case_val = gen_tac_for_expr(item->node->data.case_statement.expression, false); // Re-gen to compare
-                    for(CaseLabel* c = case_list; c; c = c->next) {
-                        // This comparison is weak (e.g. constant folding) but okay for this.
-                        if (c->value_addr->kind == case_val->kind && c->value_addr->val.const_int == case_val->val.const_int) {
-                            emit(TAC_LABEL, c->body_label, NULL, NULL);
-                            break;
-                        }
-                    }
-                    gen_tac_for_node(item->node->data.case_statement.body);
-                 } else if (item->node->type == NODE_DEFAULT_STATEMENT) {
-                    emit(TAC_LABEL, default_label, NULL, NULL);
-                    gen_tac_for_node(item->node->data.default_statement.body);
-                 } else {
-                    gen_tac_for_node(item->node); // Statements before first case
+             push_control_flow(end_label, NULL); // Set break label
+
+             // --- Pass 2: Emit the jump table (the series of comparisons) ---
+             for (CaseInfo* ci = case_info_list; ci; ci = ci->next) {
+                 if (ci->node->type == NODE_CASE_STATEMENT) {
+                     TacAddr* case_val = gen_tac_for_expr(ci->node->data.case_statement.expression, false);
+                     TacAddr* cmp_res = new_temp(create_type(TYPE_INT));
+                     emit(TAC_EQ, cmp_res, switch_expr, case_val);
+                     emit(TAC_IFNZ, ci->body_label, cmp_res, NULL); // If equal, jump to the case body
                  }
              }
-             
-             // Free case list
-             while(case_list) {
-                CaseLabel* next = case_list->next;
-                // Don't free addrs, they are in the TAC list
-                free(case_list);
-                case_list = next;
+             emit(TAC_GOTO, default_label, NULL, NULL); // If no cases match, go to default
+
+             // --- Pass 3: Emit the actual code for the switch body ---
+             for (ASTNodeList* item = body_items; item; item = item->next) {
+                 // Check if the current statement is a case/default and emit its label
+                 for (CaseInfo* ci = case_info_list; ci; ci = ci->next) {
+                     if (ci->node == item->node) {
+                         emit(TAC_LABEL, ci->body_label, NULL, NULL);
+                         break;
+                     }
+                 }
+                 // Generate TAC for the statement itself
+                 gen_tac_for_node(item->node);
+             }
+
+             // Free the temporary info list
+             while (case_info_list) {
+                 CaseInfo* next = case_info_list->next;
+                 free(case_info_list);
+                 case_info_list = next;
              }
 
              emit(TAC_LABEL, end_label, NULL, NULL); // Final exit point
              pop_control_flow();
              break;
         }
-        case NODE_CASE_STATEMENT: // Handled within SWITCH
-        case NODE_DEFAULT_STATEMENT: // Handled within SWITCH
-             if (control_flow_stack_top < 0 || !control_flow_stack[control_flow_stack_top].break_label) {
-                fprintf(stderr, "Warning line %d: case/default statement outside switch.\n", node->lineno);
-             }
-             // The logic in NODE_SWITCH_STATEMENT handles the body
-             break;
+        case NODE_CASE_STATEMENT:
+            // The logic in NODE_SWITCH_STATEMENT places the label.
+            // Here, we just need to generate the code for the statement that follows the label.
+            gen_tac_for_node(node->data.case_statement.body);
+            break;
+        case NODE_DEFAULT_STATEMENT:
+            // The logic in NODE_SWITCH_STATEMENT places the label.
+            // Here, we just need to generate the code for the statement that follows the label.
+            gen_tac_for_node(node->data.default_statement.body);
+            break;
 
 
         // Add cases for GOTO, LABELED_STATEMENT, etc.
