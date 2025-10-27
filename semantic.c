@@ -847,6 +847,36 @@ void analyze_declaration(ASTNode *node)
             ASTNode *initializer = init_decl->data.init_declarator.initializer;
             const char *name = get_name_from_declarator(declarator);
 
+            // Handle out-of-class static member definitions (e.g., int Animal::count = 0;)
+            if (declarator->type == NODE_QUALIFIED_ID) {
+                ASTNode* qualifier_node = declarator->data.qualified_id.qualifiers->node;
+                const char* class_name = qualifier_node->data.stringValue;
+                const char* member_name = declarator->data.qualified_id.identifier->data.stringValue;
+
+                // Create a unique "qualified" name like "Animal::count"
+                char qualified_name[256];
+                snprintf(qualified_name, sizeof(qualified_name), "%s::%s", class_name, member_name);
+
+                // Build the type and add the symbol with the qualified name
+                Type* final_type = build_type_from_declarator(copy_type(base_type), declarator);
+                Symbol* new_sym = add_symbol(qualified_name, final_type, SYM_VARIABLE, init_decl->lineno);
+                
+                if (new_sym) {
+                    declarator->symbol = new_sym; // Annotate the qualified_id node for TAC
+                }
+
+                if (initializer) {
+                    // Analyze the initializer expression and check compatibility
+                    Type* initializer_type = analyze_expression(initializer);
+                    if (!are_types_compatible(final_type, initializer_type)) {
+                         fprintf(stderr, "Semantic Error (Line %d): Incompatible types in initialization of '%s'. Cannot assign '%s' to '%s'.\n",
+                            init_decl->lineno, qualified_name, type_to_string(initializer_type), type_to_string(final_type));
+                         semantic_errors++;
+                    }
+                }
+                continue; // Skip to the next declarator in the list
+            }
+
             if (!name)
             {
                 if (declarator->type == NODE_QUALIFIED_ID) {
@@ -1082,10 +1112,12 @@ Type *analyze_expression(ASTNode *node)
             for (Member *m = qualifier_type->data.struct_union_info.members; m; m = m->next) {
                 if (strcmp(m->name, member_name) == 0) {
                     if (m->is_static) {
-                        // It's a static member. Find the global symbol for it.
-                        // A more robust implementation would use mangled names like `Animal_count`.
-                        // For now, a direct lookup works for this example.
-                        Symbol* static_sym = find_symbol(member_name);
+                        
+                        // It's a static member. Find the global symbol using its unique qualified name.
+                        char qualified_name[256];
+                        snprintf(qualified_name, sizeof(qualified_name), "%s::%s", qualifier_name, member_name);
+                        
+                        Symbol* static_sym = find_symbol(qualified_name);
                         if (static_sym) {
                             node->symbol = static_sym; // Attach the symbol to the AST node
                             return static_sym->type;

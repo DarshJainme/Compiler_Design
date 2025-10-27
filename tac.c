@@ -1177,6 +1177,9 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
         }
 
         case NODE_FUNC_CALL: { // Cannot be lvalue
+            ASTNode* func_expr_node = node->data.func_call.function;
+            TacAddr* func_addr = NULL; // Will hold the 'this' pointer for member calls
+
             // 1. Evaluate arguments and emit PARAM instructions (reverse order)
             int arg_count = 0;
             ASTNodeList* arg_list[100]; // Assume max 100 args
@@ -1190,17 +1193,37 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 emit(TAC_PARAM, NULL, arg_addr, NULL);
             }
 
-            // 2. Get function address/label
-            TacAddr* func_addr = gen_tac_for_expr(node->data.func_call.function, false);
-            if (!func_addr) return NULL;
+            // 2. Check for member function call to handle 'this' pointer
+            if (func_expr_node->type == NODE_MEMBER_ACCESS) {
+                // It's a member call (obj.func() or obj->func()).
+                // Get the address of the object to pass as the 'this' pointer.
+                func_addr = gen_tac_for_expr(func_expr_node->data.member_access.object, true);
+                if (!func_addr) return NULL;
+
+                // Pass the 'this' pointer. As we are pushing in reverse, this will be
+                // emitted AFTER the other arguments to become the FIRST argument.
+                emit(TAC_PARAM, NULL, func_addr, NULL);
+                arg_count++; // Increment arg count for the 'this' pointer
+                // Get the address of the MEMBER FUNCTION itself.
+                // The semantic analyzer should have attached the function's symbol to the node.
+                if (!func_expr_node->symbol) {
+                     fprintf(stderr, "Compiler Error line %d: Member function access node not annotated with symbol.\n", func_expr_node->lineno);
+                     return NULL;
+                }
+                func_addr = new_var_addr(func_expr_node->symbol);
+            }
 
             // 3. Emit CALL instruction
             TacAddr* result = NULL;
             Type* return_type = NULL;
-            if (func_addr->type && func_addr->type->kind == TYPE_FUNCTION) {
-                 return_type = func_addr->type->data.function_sig.return_type;
-            } else if (func_addr->type && func_addr->type->kind == TYPE_POINTER && func_addr->type->data.base_info.base->kind == TYPE_FUNCTION) {
-                 return_type = func_addr->type->data.base_info.base->data.function_sig.return_type;
+
+            // Get return type from the function's type, not the object's
+            Type* func_type = func_addr->type;
+            if (func_type && func_type->kind == TYPE_POINTER && func_type->data.base_info.base->kind == TYPE_FUNCTION) {
+                 func_type = func_type->data.base_info.base; // Handle function pointers
+            }
+            if (func_type && func_type->kind == TYPE_FUNCTION) {
+                 return_type = func_type->data.function_sig.return_type;
             } else {
                  fprintf(stderr, "Warning line %d: Cannot determine return type of called function.\n", node->lineno);
                  return_type = create_type(TYPE_INT); // Assume int if unknown
@@ -1215,7 +1238,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
         }
 
         case NODE_CONDITIONAL_EXPR: {
-             // --- THIS IS THE FIX ---
              TacAddr* result;
              TacAddr* true_label = new_label_addr();
              TacAddr* false_label = new_label_addr();
