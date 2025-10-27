@@ -1081,12 +1081,20 @@ Type *analyze_expression(ASTNode *node)
             // 3. Find member in the class/struct's member list
             for (Member *m = qualifier_type->data.struct_union_info.members; m; m = m->next) {
                 if (strcmp(m->name, member_name) == 0) {
-                    if (!m->is_static) {
-                        fprintf(stderr, "Semantic Error (Line %d): Cannot access non-static member '%s' using '::'.\n", node->lineno, member_name);
+                    if (m->is_static) {
+                        // It's a static member. Find the global symbol for it.
+                        // A more robust implementation would use mangled names like `Animal_count`.
+                        // For now, a direct lookup works for this example.
+                        Symbol* static_sym = find_symbol(member_name);
+                        if (static_sym) {
+                            node->symbol = static_sym; // Attach the symbol to the AST node
+                            return static_sym->type;
+                        }
+                    } else {
+                        fprintf(stderr, "Semantic Error (Line %d): Cannot access non-static member '%s' via '::'.\n", node->lineno, member_name);
                         semantic_errors++;
                         return create_type(TYPE_UNKNOWN);
                     }
-                    return m->type; // Found it, return its type
                 }
             }
             
@@ -1288,6 +1296,13 @@ Type *analyze_expression(ASTNode *node)
             // Find the member in the type's member list
             for (Member *m = object_type->data.struct_union_info.members; m; m = m->next) {
                 if (strcmp(m->name, member_name) == 0) {
+                    // If the member is a function, find its global symbol and annotate the node.
+                    if (m->type->kind == TYPE_FUNCTION) {
+                        Symbol* func_sym = find_symbol(member_name); // Find the global function symbol
+                        if (func_sym) {
+                            node->symbol = func_sym; // Attach the symbol to the AST node
+                        }
+                    }
                     return m->type; // Found it, return its type
                 }
             }
