@@ -383,7 +383,18 @@ jump_statement
 /* --- Declarations --- */
 declaration
     : declaration_specifiers ';' { $$ = create_declaration_node($1, NULL); }
-    | declaration_specifiers init_declarator_list ';' { $$ = create_declaration_node($1, $2); }
+    | declaration_specifiers init_declarator_list ';' { 
+        // Check if the first specifier is TYPEDEF
+        if ($1 && $1->node && $1->node->type == NODE_SPECIFIER && $1->node->data.specifier == TYPEDEF) {
+            // If it is, iterate through the declarators and add their names as typenames
+            for (ASTNodeList* l = $2; l; l = l->next) {
+                ASTNode* declarator = l->node->data.init_declarator.declarator;
+                char* name = get_name_from_declarator(declarator);
+                if (name) add_typename(name);
+            }
+        }
+        $$ = create_declaration_node($1, $2); 
+    }
     | CLASS IDENTIFIER ';' { add_typename($2); $$ = create_class_node($2, NULL, NULL); }
     // we added this as we wanted to add forward declaration
     ;

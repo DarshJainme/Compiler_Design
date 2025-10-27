@@ -942,9 +942,21 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             }
         }
         case NODE_QUALIFIED_ID: {
-             fprintf(stderr, "Warning line %d: TAC generation for qualified IDs (::) is not fully supported yet.\n", node->lineno);
-             // Return a dummy value or NULL to avoid crashing, but it won't be correct.
-             return new_temp(create_type(TYPE_UNKNOWN)); // Dummy temp to prevent cascade failures
+            // Semantic analysis has attached the symbol for the static member.
+            Symbol* sym = node->symbol;
+            if (!sym) {
+                fprintf(stderr, "Compiler Internal Error (Line %d): AST node for qualified ID was not annotated with symbol information.\n", node->lineno);
+                return new_temp(create_type(TYPE_UNKNOWN));
+            }
+            // Treat it just like a global variable access.
+            TacAddr* var_addr = new_var_addr(sym);
+            if (is_lvalue) {
+                TacAddr* result = new_temp(create_pointer_type(var_addr->type));
+                emit(TAC_ADDR, result, var_addr, NULL);
+                return result;
+            } else {
+                return var_addr;
+            }
         }
 
         case NODE_BINARY_EXPR: {
@@ -1360,6 +1372,23 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
              }
              if (!member_type) return NULL;
 
+             // If the member is a function, we don't calculate an offset.
+             // We just return a direct address to the function's symbol.
+             if (member_type->kind == TYPE_FUNCTION) {
+                 // The semantic analyzer should have attached the function's symbol to this node.
+                 if (node->symbol) {
+                     return new_var_addr(node->symbol);
+                 } else {
+                     // Fallback: This is less robust, but can work if the member name is unique.
+                     // It's better to ensure semantic analysis annotates the node.
+                     fprintf(stderr, "Warning line %d: Member function access node was not annotated with a direct symbol. Falling back to name lookup for '%s'.\n", node->lineno, member_name);
+                     Symbol* func_sym = find_symbol(member_name);
+                     if (func_sym) return new_var_addr(func_sym);
+                 }
+                 // If we reach here, we couldn't find the function symbol.
+                 fprintf(stderr, "Compiler Error line %d: Could not resolve symbol for member function '%s'.\n", node->lineno, member_name);
+                 return NULL;
+             }
              TacAddr* member_abs_addr = new_temp(create_pointer_type(member_type));
              emit(TAC_ADD, member_abs_addr, obj_base_addr, offset_addr); // member_addr = base_addr + offset
 
@@ -1508,12 +1537,20 @@ void gen_tac_for_node(ASTNode* node) {
 
                 // 1. Find the base Identifier node for this declarator
                 ASTNode* id_node = declarator;
-                while (id_node && id_node->type != NODE_IDENTIFIER) {
-                    if (id_node->type == NODE_POINTER_DECLARATOR) id_node = id_node->data.pointer_declarator.base_declarator;
-                    else if (id_node->type == NODE_ARRAY_DECLARATOR) id_node = id_node->data.array_declarator.base_declarator;
-                    else if (id_node->type == NODE_FUNCTION_DECLARATOR) id_node = id_node->data.function_declarator.base_declarator;
-                    else if (id_node->type == NODE_REFERENCE_DECLARATOR) id_node = id_node->data.reference_declarator.base_declarator;
-                    else id_node = NULL; // Should not happen
+                // Handle qualified IDs like `Animal::count`
+                if (id_node && id_node->type == NODE_QUALIFIED_ID) {
+                    // For a qualified ID, the symbol is on the qualified_id node itself.
+                    // We don't need to traverse further.
+                } 
+                else{
+
+                    while (id_node && id_node->type != NODE_IDENTIFIER) {
+                        if (id_node->type == NODE_POINTER_DECLARATOR) id_node = id_node->data.pointer_declarator.base_declarator;
+                        else if (id_node->type == NODE_ARRAY_DECLARATOR) id_node = id_node->data.array_declarator.base_declarator;
+                        else if (id_node->type == NODE_FUNCTION_DECLARATOR) id_node = id_node->data.function_declarator.base_declarator;
+                        else if (id_node->type == NODE_REFERENCE_DECLARATOR) id_node = id_node->data.reference_declarator.base_declarator;
+                        else id_node = NULL; // Should not happen
+                    }
                 }
                 
                 if (!id_node || id_node->type != NODE_IDENTIFIER) continue; // No identifier (e.g., abstract declarator)
