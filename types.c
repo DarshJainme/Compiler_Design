@@ -49,11 +49,11 @@ Type* create_reference_type(Type* base) {
     return ref_type;
 }
 
-Type* create_array_type(Type* base, int size) { // Size param might be unused if size comes from AST later
+Type* create_array_type(Type* base, int size) { 
     Type* arr_type = create_type(TYPE_ARRAY);
     arr_type->data.base_info.base = base;
-    arr_type->data.base_info.num_dimensions = 0; // Initialize
-    // Dimensions will be added by semantic analysis
+    arr_type->data.base_info.num_dimensions = 0; 
+    // We will add dimensions later in semantic analysis
     return arr_type;
 }
 
@@ -124,30 +124,17 @@ char* type_to_string(Type* type) {
         return buffer;
     }
     
-    // Now call the recursive helper for valid types
     return type_to_string_recursive(type, buffer);
 }
 
-// case VOID:   type->kind = TYPE_VOID;   type_specified = 1; break;
-//                 case BOOL:   type->kind = TYPE_BOOL;   type_specified = 1; break;
-//                 case CHAR:   type->kind = TYPE_CHAR;   type_specified = 1; break;
-//                 case STRING: type->kind = TYPE_STRING; type_specified = 1; break;
-//                 case SHORT:  type->kind = TYPE_SHORT;  type_specified = 1; break;
-//                 case INT:    type->kind = TYPE_INT;    type_specified = 1; break;
-//                 case LONG:   type->kind = TYPE_LONG;   type_specified = 1; break;
-//                 case FLOAT:  type->kind = TYPE_FLOAT;  type_specified = 1; break;
-//                 case DOUBLE: type->kind = TYPE_DOUBLE; type_specified = 1; break;
-//                 case UNSIGNED: type->is_unsigned = 1; break;
-//                 case CONST:    type->is_const = 1; break;
-// In semantic.c
 
 Type* get_type_from_specifiers(ASTNodeList* specifiers) {
-    if (!specifiers) return create_type(TYPE_INT); // C default
+    if (!specifiers) return create_type(TYPE_INT); 
 
     Type* type = NULL;
     int type_specified = 0;
     
-    // These will store qualifiers found in the specifier list
+    // Used to store qualifiers found in the specifier list
     int is_const = 0;
     int is_unsigned = 0;
     int storage = 0;
@@ -205,10 +192,8 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
                          semantic_errors++;
                     }
                 } else if (!type_specified) {
-                    // This is an anonymous struct/union. It must be defined here.
-                    // The definition itself is handled by the pre-pass in analyze_node.
-                    // Here, we create a placeholder. The calling context (analyze_declaration)
-                    // will not be able to use this effectively without a name, which is correct.
+                    // This is an anonymous struct/union. It must be defined here. The definition itself is handled by the pre-pass in analyze_node.
+            
                     type = create_type(spec_node->data.struct_or_union_specifier.kind == STRUCT ? TYPE_STRUCT : TYPE_UNION);
                     type_specified = 1;
                 }
@@ -218,7 +203,7 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
             case NODE_CLASS_SPECIFIER: {
                  const char* class_name = spec_node->data.class_specifier.name;
                  Symbol* sym = find_symbol(class_name);
-                 if (sym && sym->type->kind == TYPE_STRUCT) { // Classes are stored as structs
+                 if (sym && sym->type->kind == TYPE_STRUCT) { 
                      if (!type_specified) {
                          type = copy_type(sym->type);
                          type_specified = 1;
@@ -235,10 +220,9 @@ Type* get_type_from_specifiers(ASTNodeList* specifiers) {
         }
     }
     if (!type) {
-        type = create_type(TYPE_INT); // Default to int if no other type was found
+        type = create_type(TYPE_INT); 
     }
     
-    // Apply qualifiers at the end
     type->is_const = is_const;
     type->is_unsigned = is_unsigned;
     type->storage_class = storage;
@@ -252,15 +236,7 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
     Type* final_type = base_type;
     ASTNode* current = declarator;
 
-    // --- REVISED LOGIC ---
-    // This loop processes the declarator chain from the identifier outwards.
-    // Example: int *arr[10];
-    // innermost: arr (identifier)
-    // next:      [10] (array declarator)
-    // next:      * (pointer declarator)
-    // base_type starts as 'int'
-
-    // 1. Find the innermost part (usually identifier or parentheses)
+    // 1. Find the innermost part 
     ASTNode* innermost = declarator;
     while (innermost && innermost->type != NODE_IDENTIFIER && innermost->type != NODE_QUALIFIED_ID) {
         switch(innermost->type) {
@@ -276,8 +252,8 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
             case NODE_REFERENCE_DECLARATOR:
                 innermost = innermost->data.reference_declarator.base_declarator;
                 break;
-            default: // Like '(' declarator ')' - need to handle parentheses if needed
-                innermost = NULL; // Stop if unexpected type encountered
+            default:
+                innermost = NULL; 
                 break;
         }
     }
@@ -290,11 +266,10 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
         switch (current->type) {
             case NODE_POINTER_DECLARATOR:
                 current_type = create_pointer_type(current_type);
-                // Apply qualifiers from the pointer node itself
                 if (current->data.pointer_declarator.pointer && current->data.pointer_declarator.pointer->data.pointer.qualifiers) {
                     for(ASTNodeList* q = current->data.pointer_declarator.pointer->data.pointer.qualifiers; q; q=q->next) {
                          if(q->node->data.specifier == CONST) current_type->is_const = 1;
-                         // Handle VOLATILE etc. if needed
+                        
                     }
                 }
                 current = current->data.pointer_declarator.base_declarator;
@@ -306,27 +281,26 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
             case NODE_ARRAY_DECLARATOR: {
                 int size = 0;
                 if (current->data.array_declarator.size) {
-                    // Evaluate constant expression for size (Simplified: assume constant)
                     if (current->data.array_declarator.size->type == NODE_CONSTANT) {
                          size = atoi(current->data.array_declarator.size->data.stringValue);
                          if (size <= 0) {
                               fprintf(stderr, "Semantic Error line %d: Array size must be positive.\n", current->lineno);
                               semantic_errors++;
-                              size = 0; // Treat as invalid/unknown size
+                              size = 0; 
                          }
                     } else {
                          fprintf(stderr, "Semantic Error line %d: Array size must be a constant integer expression.\n", current->lineno);
                          semantic_errors++;
-                         size = 0; // Treat as invalid/unknown size
+                         size = 0; 
                     }
                 } else {
-                     size = 0; // Size unspecified (e.g., [], or deduced from initializer)
+                     size = 0; 
                 }
 
                 // Create a NEW array type whose base is the current_type
                 Type* new_array_type = create_type(TYPE_ARRAY);
-                new_array_type->data.base_info.base = current_type; // The element type is the type built so far
-                new_array_type->data.base_info.num_dimensions = 1; // This node adds one dimension
+                new_array_type->data.base_info.base = current_type; 
+                new_array_type->data.base_info.num_dimensions = 1; 
                 new_array_type->data.base_info.dimensions[0] = size;
 
                 // If the element type itself was already an array, copy its dimensions
@@ -342,18 +316,17 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
                      }
                 }
 
-                current_type = new_array_type; // Update current_type to the new array type
+                current_type = new_array_type; 
                 current = current->data.array_declarator.base_declarator;
                 break;
             }
             case NODE_FUNCTION_DECLARATOR: {
-                // Function declarators modify the type *around* the base type
                 Type* func_type = create_type(TYPE_FUNCTION);
-                func_type->data.function_sig.return_type = current_type; // Type built so far is return type
+                func_type->data.function_sig.return_type = current_type; 
                 func_type->data.function_sig.params = current->data.function_declarator.parameters;
                 
-                // Check for variadic functions
-                func_type->data.function_sig.is_variadic = false; // Default to false
+                // Variadic functions
+                func_type->data.function_sig.is_variadic = false; 
                 if (func_type->data.function_sig.params) {
                     ASTNodeList* p = func_type->data.function_sig.params;
                     while (p->next) {
@@ -368,14 +341,13 @@ Type* build_type_from_declarator(Type* base_type, ASTNode* declarator) {
                 current = current->data.function_declarator.base_declarator;
                 break;
             }
-            default: // Handle parentheses?
-                 current = NULL; // Stop if unexpected
+            default: 
+                 current = NULL; 
                  break;
         }
     }
 
     final_type = current_type;
-    // Apply top-level qualifiers from base_type (like const int *...)
     final_type->is_const = base_type->is_const;
     final_type->is_unsigned = base_type->is_unsigned;
     final_type->storage_class = base_type->storage_class;
@@ -404,9 +376,9 @@ int are_types_compatible(Type* type1, Type* type2) {
         if (type1->kind == TYPE_POINTER || type1->kind == TYPE_ARRAY) {
             return are_types_compatible(type1->data.base_info.base, type2->data.base_info.base);
         }
-        return 1; // Basic types are the same
+        return 1; 
     }
-    // Allow assignment between any two arithmetic types (e.g., int = float)
+    // Allow assignment between any two arithmetic types 
     if (is_arithmetic_type(type1) && is_arithmetic_type(type2)) {
         return 1;
     }

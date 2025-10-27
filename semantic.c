@@ -661,9 +661,9 @@ void analyze_class_specifier(ASTNode *node) {
      ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
     for (ASTNodeList* base_item = base_clauses; base_item; base_item = base_item->next) {
         ASTNode* base_specifier_node = base_item->node;
-        if (base_specifier_node->type != NODE_BASE_CLASS) continue; // FIX 1: Use NODE_BASE_CLASS
+        if (base_specifier_node->type != NODE_BASE_CLASS) continue; // Use NODE_BASE_CLASS
 
-        // FIX 2 & 3: Access data correctly via .base_class and .stringValue
+        // Access data via .base_class and .stringValue
         const char* base_class_name = base_specifier_node->data.base_class.class_name->data.stringValue;
         Symbol* base_symbol = find_symbol(base_class_name);
 
@@ -694,7 +694,7 @@ void analyze_class_specifier(ASTNode *node) {
             }
         }
     }
-    // --- END: INHERITANCE HANDLING ---
+    //
 
     enter_scope();
     ASTNodeList* members = node->data.class_specifier.members;
@@ -790,9 +790,7 @@ void analyze_declaration(ASTNode *node)
 {
     if (!node || node->type != NODE_DECLARATION) return;
     
-    // =================================================================
-    // START OF FIX #2: Make returns conditional on having declarators
-    // =================================================================
+    // Make returns conditional on having declarators
     bool has_declarators = node->data.declaration.declarators != NULL;
     
     ASTNode* first_spec = node->data.declaration.specifiers->node;
@@ -808,9 +806,6 @@ void analyze_declaration(ASTNode *node)
         analyze_class_specifier(first_spec);
         return; // This logic was already correct
     }
-    // =================================================================
-    // END OF FIX #2
-    // =================================================================
     
     Type *base_type = get_type_from_specifiers(node->data.declaration.specifiers);
     int is_auto = (base_type->storage_class == AUTO);
@@ -1389,7 +1384,7 @@ Type *analyze_expression(ASTNode *node)
     }
 }
 
-void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass context down
+void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // Pass context down
 {
     if (!node)
         return;
@@ -1398,13 +1393,11 @@ void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass 
     case NODE_TRANSLATION_UNIT:
         for (ASTNodeList *item = node->data.items_list; item; item = item->next)
         {
-            analyze_node(item->node, NULL); // FIX: Pass NULL context for global scope
+            analyze_node(item->node, NULL); // Pass NULL context for global scope
         }
         break;
     case NODE_DECLARATION:
-        // =================================================================
-        // START OF FIX #1: Remove the entire "pre-pass" block
-        // =================================================================
+        // Remove the entire "pre-pass" block
         /*
         // Pre-pass for definitions that create types (struct/union/class)
         if (node->data.declaration.specifiers) {
@@ -1415,11 +1408,7 @@ void analyze_node(ASTNode *node, FunctionAnalysisContext* context) // FIX: Pass 
                 analyze_class_specifier(spec_node);
             }
         }
-        */
-        // =================================================================
-        // END OF FIX #1
-        // =================================================================
-        
+        */        
         analyze_declaration(node);
         break;
     case NODE_FUNCTION_DEFINITION:

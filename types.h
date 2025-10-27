@@ -32,7 +32,7 @@ struct Scope;
 
 typedef struct StructUnionInfo {
     char *name;
-    struct Member *members; // linked list of members for struct/union
+    struct Member *members; 
     struct Scope* member_scope;
 } StructUnionInfo;
 
@@ -41,19 +41,19 @@ struct Type {
     TypeKind kind;
     bool is_const;
     bool is_unsigned;
-    int storage_class;  // to store STATIC, EXTERN, etc.
+    int storage_class;  
 
     union {
         struct {
             Type* base;
-            int dimensions[MAX_ARRAY_DIMENSIONS]; // Store dimension sizes here
-            int num_dimensions;                   // Number of valid dimensions stored
+            int dimensions[MAX_ARRAY_DIMENSIONS]; 
+            int num_dimensions;                
         } base_info;
 
         // For functions
         struct {
             struct Type* return_type;
-            ASTNodeList* params; // We'll link to AST nodes for param types
+            ASTNodeList* params; 
             bool is_variadic;
         } function_sig;
         
@@ -86,4 +86,4 @@ Type* get_common_arithmetic_type(Type* type1, Type* type2);
 // Utility
 char* type_to_string(Type* type);
 
-#endif // TYPES_H
+#endif 
