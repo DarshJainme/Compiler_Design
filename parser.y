@@ -138,6 +138,7 @@ external_declaration
     : function_definition  { $$ = $1; }
     | declaration          { $$ = $1; }
     | expression_statement { $$ = $1; } // Allow top-level statements
+    | error ';'            { yyerrok; $$ = NULL; } // Add this for top-level error recovery
     ;
 
 function_definition
