@@ -5,6 +5,7 @@
 #include "types.h"
 
 static Scope* current_scope = NULL;
+static int current_scope_level = 0;
 extern int yylineno;
 // extern int semantic_errors;
 void init_symbol_table() {
@@ -17,6 +18,7 @@ void init_symbol_table() {
     current_scope = (Scope*)calloc(1, sizeof(Scope));
     current_scope->parent = NULL;
     current_scope->symbol_count = 0;
+    current_scope_level = 0;
 }
 
 void destroy_scope(Scope* scope) {
@@ -32,6 +34,7 @@ void enter_scope() {
     Scope* new_scope = (Scope*)calloc(1, sizeof(Scope));
     new_scope->parent = current_scope;
     current_scope = new_scope;
+    current_scope_level++;
 }
 
 Scope* get_current_scope(){
@@ -49,6 +52,7 @@ Scope* leave_scope() {
 
     Scope* popped_scope = current_scope;
     current_scope = current_scope->parent;
+    current_scope_level--;
     return popped_scope;
 }
 
@@ -76,6 +80,12 @@ Symbol* add_symbol(const char* name, Type* type, SymbolKind kind, int lineno) {
     new_symbol->type = type;
     new_symbol->kind = kind;
     new_symbol->line_declared = lineno;
+
+    // initialize
+    new_symbol->scope_level = current_scope_level;
+    new_symbol->stack_offset = 0;
+    new_symbol->next_use = -1;
+    new_symbol->is_live = false;
 
     current_scope->symbols[current_scope->symbol_count++] = new_symbol;
 
@@ -128,12 +138,14 @@ void print_symbol_table(Scope* scope, int depth) {
         Symbol* sym = scope->symbols[i];
 
         // Print symbol details
-        printf("%s  Name: %-15s, Type: %-25s, Kind: %-10s, Line: %d\n",
+        printf("%s  Name: %-15s, Scope: %-3d, Offset: %-4d, Kind: %-10s, Line: %d, Type: %s\n", // <-- Modified Print
                indent,
                sym->name,
-               type_to_string(sym->type), // Ensure type_to_string is robust
+               sym->scope_level,
+               sym->stack_offset,
                symbol_kind_to_string(sym->kind),
-               sym->line_declared);
+               sym->line_declared,
+               type_to_string(sym->type)); // Ensure type_to_string is robust
         if (sym->kind == SYM_TYPEDEF &&
             (sym->type->kind == TYPE_STRUCT || sym->type->kind == TYPE_UNION) &&
              sym->type->data.struct_union_info.member_scope)

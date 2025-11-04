@@ -5,6 +5,7 @@ struct Type;
 struct ASTNode;
 #include "types.h"
 #include "semantic.h"
+#include <stdbool.h>
 
 #define MAX_SYMBOLS 1024
 
@@ -23,6 +24,12 @@ typedef struct Symbol {
     struct Type* type;
     SymbolKind kind;
     int line_declared;
+    int scope_level; // 0 for global, 1 for func params and 2+ for nested
+    int stack_offset; // byte offset from $fp (e.g.,, -4, -8)
+
+    // for liveliness analysis - next use table
+    int next_use; // 3ac instruction line of next use
+    bool is_live; // is this variable live?
 } Symbol;
 
 // Represents a single scope (e.g., global, function body)
@@ -43,6 +50,6 @@ Symbol* add_symbol(const char* name, struct Type* type, SymbolKind kind, int lin
 Symbol* find_symbol(const char* name);
 Symbol* find_symbol_in_current_scope(const char* name);
 void print_symbol_table(Scope *scope, int depth);
-const char* symbol_kind_to_strign(SymbolKind kind);
+const char* symbol_kind_to_string(SymbolKind kind);
 
 #endif // SYMBOL_TABLE

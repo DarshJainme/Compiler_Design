@@ -6,6 +6,7 @@
 #include "semantic.h"
 #include "symbol_table.h"
 #include "tac.h"
+#include "mips.h"
 
 ASTNode *root = NULL;
 int parse_errors = 0;
@@ -697,6 +698,15 @@ int main(int argc, char **argv) {
             print_tac();
             // print_symbol_table(current_scope, 0);
 
+            if (semantic_errors == 0) { // Only run if TAC gen was clean
+                printf("\n--- Generating MIPS Assembly ---\n");
+                // Pass the head of the 3AC list and the output filename
+                generate_mips(tac_list_head, "output.s"); 
+                printf("--- MIPS Generation Complete (output.s) ---\n");
+            } else {
+                printf("\n--- MIPS Generation Skipped due to TAC errors ---\n");
+            }
+
         } else {
             printf("\n--- Semantic Analysis Failed ---\n");
         }
@@ -708,5 +718,5 @@ int main(int argc, char **argv) {
         fclose(yyin);
     }
     
-    return (parse_errors > 0);
+    return (parse_errors > 0 || semantic_errors > 0);
 }

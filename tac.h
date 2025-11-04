@@ -118,6 +118,7 @@ typedef struct TacInstr {
     TacAddr* arg2;
     struct TacInstr* next;
     struct TacInstr* prev;
+    int lineno;
 } TacInstr;
 
 // --- String Literal Management ---
@@ -132,6 +133,8 @@ extern StringLiteral* string_literal_list; // List to hold all string literals
 // Global list of all instructions
 extern TacInstr* tac_list_head;
 extern TacInstr* tac_list_tail;
+extern int temp_count;
+extern int label_count;
 
 /* --- Core TAC Functions --- */
 

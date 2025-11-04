@@ -12,9 +12,10 @@ TacInstr* tac_list_head = NULL;
 TacInstr* tac_list_tail = NULL;
 StringLiteral* string_literal_list = NULL; // Initialize list head
 
-static int temp_count = 0;
-static int label_count = 0;
+int temp_count = 0;
+int label_count = 0;
 static int string_lit_count = 0; // Counter for unique string literal labels
+static int instr_line_num = 0;
 int get_type_size(Type* type);
 
 // --- Context for break/continue ---
@@ -470,6 +471,7 @@ void emit(TacOp op, TacAddr* res, TacAddr* arg1, TacAddr* arg2) {
     instr->arg2 = arg2;
     instr->next = NULL;
     instr->prev = tac_list_tail;
+    instr->lineno = instr_line_num++;
 
     if (!instr->res && (op == TAC_LABEL || op == TAC_GOTO || op == TAC_IFZ || op == TAC_IFNZ || op == TAC_STORE)) {
          // These ops use 'res' for label or store address
@@ -594,6 +596,7 @@ void print_tac() {
 
     printf("\n--- Three-Address Code (Text Segment) ---\n");
     for (TacInstr* instr = tac_list_head; instr; instr = instr->next) {
+        printf("%-4d: ", instr->lineno);
         if (instr->op == TAC_LABEL) {
             print_addr(instr->res);
             printf(":");
@@ -872,6 +875,7 @@ void generate_tac(ASTNode* root) {
     temp_count = 0;
     label_count = 0;
     string_lit_count = 0;
+    instr_line_num = 0; // Reset line counter
     control_flow_stack_top = -1;
     tac_list_head = tac_list_tail = NULL;
     string_literal_list = NULL; // Clear string literal list
