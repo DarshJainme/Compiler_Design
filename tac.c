@@ -328,10 +328,25 @@ int get_member_offset(Type* struct_type, const char* member_name) {
 
     int offset = 0;
     for (Member* m = struct_type->data.struct_union_info.members; m; m = m->next) {
-        if (strcmp(m->name, member_name) == 0) {
-            return offset;
+        int member_size = get_type_size(m->type);
+        
+        // Use member_size for basic alignment (e.g., int aligns to 4)
+        // A more robust system would use alignment-specific values (e.g., long=8, int=4, short=2)
+        int member_alignment = member_size; 
+        if (member_alignment <= 0) member_alignment = 1; // Avoid 0-alignment
+        // Cap alignment at a reasonable max (e.g. 8 for double)
+        if (member_alignment > 8) member_alignment = 8; 
+
+        // Add padding before member if needed
+        if (offset % member_alignment != 0) {
+            offset += member_alignment - (offset % member_alignment);
         }
-        offset += get_type_size(m->type); // no padding/alignment
+
+        if (strcmp(m->name, member_name) == 0) {
+            return offset; // Found it, return the *aligned* offset
+        }
+        
+        offset += member_size; // Advance offset by the member's size
     }
     return -1; // Member not found
 }
@@ -1683,7 +1698,31 @@ void gen_tac_for_node(ASTNode* node) {
                     if (initializer->type == NODE_INITIALIZER_LIST) {
                          int total_byte_offset = 0;
                          gen_tac_for_init_list_recursive(lvalue_addr, target_type, initializer->data.items_list, &total_byte_offset);
-                    } else {
+                    } 
+                    // --- ADD THIS NEW ELSE-IF BLOCK ---
+                    else if (target_type->kind == TYPE_ARRAY &&
+                               target_type->data.base_info.base->kind == TYPE_CHAR &&
+                               initializer->type == NODE_STRING_LITERAL) 
+                    {
+                        // Special case: char arr[] = "Hello";
+                        // Emit a series of byte stores for each character, including '\0'
+                        char* str = initializer->data.stringValue;
+                        int len = strlen(str);
+                        Type* char_type = create_type(TYPE_CHAR);
+                        
+                        for (int i = 0; i <= len; i++) { // Include the null terminator
+                            // We treat chars as their integer values in TAC
+                            TacAddr* char_val = new_const_int((int)str[i]);
+                            TacAddr* offset = new_const_int(i); // Byte offset
+                            
+                            TacAddr* elem_addr = new_temp(create_pointer_type(char_type));
+                            emit(TAC_ADD, elem_addr, lvalue_addr, offset);
+                            emit(TAC_STORE, elem_addr, char_val, NULL);
+                        }
+                        // Note: We don't free char_type, it's a lightweight non-malloc'd struct
+                    }
+                    // --- END OF NEW BLOCK ---
+                    else {
                         TacAddr* rvalue = gen_tac_for_expr(initializer, false);
                         if (!rvalue) continue;
                         rvalue = emit_conversion(rvalue, target_type);

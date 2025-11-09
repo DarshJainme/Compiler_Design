@@ -79,7 +79,7 @@ static TempLiveness* temp_live_info = NULL; // Array, will be sized to temp_coun
 static int max_temp_id = 0; // The highest t# used in the function
 
 // --- Forward Declarations ---
-static void gen_mips_for_instr(TacInstr* instr, BasicBlock* block);
+static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym);
 static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res);
 static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res);
 static void mips_emit(const char* format, ...);
@@ -225,8 +225,28 @@ static AddrDesc* get_or_create_ad_entry(TacAddr* var) {
     AddrDesc* ad = ad_list_head;
     while (ad) {
         if (ad->var->kind == var->kind) {
-            if (var->kind == ADDR_VARIABLE && ad->var->val.var == var->val.var) return ad;
-            if (var->kind == ADDR_TEMP && ad->var->val.temp_id == var->val.temp_id) return ad;
+            switch(var->kind) {
+                case ADDR_VARIABLE:
+                    if (ad->var->val.var == var->val.var) return ad;
+                    break;
+                case ADDR_TEMP:
+                    if (ad->var->val.temp_id == var->val.temp_id) return ad;
+                    break;
+                case ADDR_CONSTANT_INT:
+                    if (ad->var->val.const_int == var->val.const_int) return ad;
+                    break;
+                case ADDR_CONSTANT_FLOAT:
+                    if (ad->var->val.const_float == var->val.const_float) return ad;
+                    break;
+                case ADDR_STRING:
+                    // We need to compare the string labels
+                    if (ad->var->val.string_label && var->val.string_label &&
+                        strcmp(ad->var->val.string_label, var->val.string_label) == 0) return ad;
+                    break;
+                default:
+                    // Other types (like ADDR_LABEL) might not be cached
+                    break;
+            }
         }
         ad = ad->next;
     }
@@ -417,7 +437,8 @@ static void build_basic_blocks(TacInstr* tac_head) {
 
         switch (instr->op) {
             case TAC_LABEL:
-                leaders[i] = true; // Target of a jump is a leader
+            case TAC_BEGIN_FUNC: // <-- *** ADDED THIS LINE ***
+                leaders[i] = true; // Target of a jump or start of a func is a leader
                 break;
             default: break;
         }
@@ -556,20 +577,15 @@ static void compute_liveness(BasicBlock* block, List* vars_in_func) {
 // Assign stack offsets and return lists of variables/temporaries in the function
 static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_list_out) {
     current_stack_offset = 0; // Reset for new function
-    max_temp_id = 0; // Reset max temp
     
-    // Clear temp offset map
+    // Clear temp offset map (this IS per-function)
     while (temp_offset_map) {
         TempOffset* next = temp_offset_map->next;
         free(temp_offset_map);
         temp_offset_map = next;
     }
     
-    // Clear temp liveness info
-    if (temp_live_info) {
-        free(temp_live_info);
-        temp_live_info = NULL;
-    }
+    // temp_live_info is now global and allocated ONCE. Do not free/alloc here.
     
     List* vars_in_func = list_create();
     List* temps_in_func = list_create();
@@ -591,9 +607,7 @@ static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_lis
                         list_append(vars_in_func, addrs[i]->val.var);
                     }
                 } else if (addrs[i]->kind == ADDR_TEMP) {
-                    if (addrs[i]->val.temp_id > max_temp_id) {
-                        max_temp_id = addrs[i]->val.temp_id;
-                    }
+                    // max_temp_id is now global, do not update it here
                     if (!list_contains(temps_in_func, (void*)(long)addrs[i]->val.temp_id)) {
                         list_append(temps_in_func, (void*)(long)addrs[i]->val.temp_id);
                     }
@@ -633,15 +647,7 @@ static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_lis
         mips_comment("Assigning stack offset %d to t%d", t_off->offset, t_off->temp_id);
     }
     
-    // --- Allocate the liveness table for temporaries ---
-    // We now know the max temp_id
-    if (max_temp_id >= 0) { // Changed from > 0 to >= 0 to handle t0
-        temp_live_info = (TempLiveness*)calloc(max_temp_id + 1, sizeof(TempLiveness));
-        if (!temp_live_info) {
-            fprintf(stderr, "Fatal: Could not allocate memory for temp liveness info.\n");
-            exit(1);
-        }
-    }
+    // --- Liveness table allocation is REMOVED from here ---
 
     *temps_list_out = temps_in_func;
     return vars_in_func;
@@ -783,11 +789,40 @@ static void spill_gpr(int reg_index) {
     
     while (n) {
         TacAddr* var = (TacAddr*)list_get_data(n);
-        get_mem_loc_str(loc_buf, 64, var);
-        mips_emit("sw %s, %s", temp_reg_names[reg_index], loc_buf);
-        ad_set_var_in_mem(var); 
+
+        // --- NEW CHECK: Can this var be spilled to memory? ---
+        bool has_spill_loc = false;
+        if (var->kind == ADDR_VARIABLE) {
+            has_spill_loc = true; // All variables have a location (global or stack)
+        } else if (var->kind == ADDR_TEMP) {
+            // Check if it's in the temp_offset_map
+            for (TempOffset* t = temp_offset_map; t; t = t->next) {
+                if (t->temp_id == var->val.temp_id) {
+                    has_spill_loc = true;
+                    break;
+                }
+            }
+        }
+        // --- END CHECK ---
+
+        if (has_spill_loc) {
+            get_mem_loc_str(loc_buf, 64, var);
+            // Ensure location wasn't an error
+            if (strncmp(loc_buf, "TEMP_NOT_FOUND", 14) != 0) {
+                mips_emit("sw %s, %s", temp_reg_names[reg_index], loc_buf);
+                ad_set_var_in_mem(var); 
+            } else {
+                mips_comment("ERROR: Spill location for t%d not found, spill skipped.", var->val.temp_id);
+            }
+        } else {
+            // This var (e.g., global t0) is in a register but has
+            // no home on the stack. We can't spill it.
+            mips_comment("WARNING: Evicting temp t%d from %s without spilling (no stack loc).", var->val.temp_id, temp_reg_names[reg_index]);
+        }
+        
         n = list_next(n);
     }
+    // The caller (e.g., getGPR) will call rd_clear_gpr() to finalize.
 }
 
 // --- NEW: Spill an FPR ---
@@ -802,11 +837,38 @@ static void spill_fpr(int reg_index) {
     
     while (n) {
         TacAddr* var = (TacAddr*)list_get_data(n);
-        get_mem_loc_str(loc_buf, 64, var);
-        mips_emit("s.s %s, %s", float_reg_names[reg_index], loc_buf); // Store Single
-        ad_set_var_in_mem(var);
+
+        // --- NEW CHECK: Can this var be spilled to memory? ---
+        bool has_spill_loc = false;
+        if (var->kind == ADDR_VARIABLE) {
+            has_spill_loc = true; // All variables have a location (global or stack)
+        } else if (var->kind == ADDR_TEMP) {
+            // Check if it's in the temp_offset_map
+            for (TempOffset* t = temp_offset_map; t; t = t->next) {
+                if (t->temp_id == var->val.temp_id) {
+                    has_spill_loc = true;
+                    break;
+                }
+            }
+        }
+        // --- END CHECK ---
+
+        if (has_spill_loc) {
+            get_mem_loc_str(loc_buf, 64, var);
+            // Ensure location wasn't an error
+            if (strncmp(loc_buf, "TEMP_NOT_FOUND", 14) != 0) {
+                mips_emit("s.s %s, %s", float_reg_names[reg_index], loc_buf); // Store Single
+                ad_set_var_in_mem(var);
+            } else {
+                mips_comment("ERROR: Spill location for t%d not found, spill skipped.", var->val.temp_id);
+            }
+        } else {
+            mips_comment("WARNING: Evicting temp t%d from %s without spilling (no stack loc).", var->val.temp_id, float_reg_names[reg_index]);
+        }
+        
         n = list_next(n);
     }
+    // The caller (e.g., getFPR) will call rd_clear_fpr() to finalize.
 }
 
 // Find the best register to spill using Next-Use info
@@ -922,6 +984,16 @@ static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res) {
         spill_gpr(reg_index);
         rd_clear_gpr(reg_index);
         mips_emit("li %s, %d", reg->name, var->val.const_int);
+        return reg->name;
+    }
+
+    if (var->kind == ADDR_STRING) {
+        int reg_index = find_gpr_to_spill();
+        MipsRegister* reg = &temp_reg_desc[reg_index];
+        spill_gpr(reg_index);
+        rd_clear_gpr(reg_index);
+        mips_emit("la %s, %s", reg->name, var->val.string_label);
+        // Don't track string constants in AD/RD, just load them
         return reg->name;
     }
 
@@ -1073,6 +1145,8 @@ static void free_dead_regs(TacInstr* instr) {
             next_use = temp_live_info[var->val.temp_id].next_use;
         } else if (var->kind == ADDR_CONSTANT_INT || var->kind == ADDR_CONSTANT_FLOAT) {
             is_live = false; 
+        } else if (var->kind == ADDR_STRING) {
+            is_live = false;
         }
         
         if (!is_live || next_use == current_line) {
@@ -1105,7 +1179,7 @@ static void free_dead_regs(TacInstr* instr) {
 ================================================================================
 */
 
-static void gen_mips_for_instr(TacInstr* instr, BasicBlock* block) {
+static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIFY THIS
     const char *r_res, *r_arg1, *r_arg2;
     char loc_buf[64];
     
@@ -1503,8 +1577,13 @@ static void gen_mips_for_instr(TacInstr* instr, BasicBlock* block) {
                     mips_emit("move $v0, %s", r_arg1); // Put int return val in $v0
                 }
             }
-            Symbol* func_sym = block->start->res->val.var; 
-            mips_emit("j .L%s_epilogue", func_sym->name);
+            // Symbol* func_sym = block->start->res->val.var; // <-- THIS IS THE CRASH, DELETE IT
+            if (func_sym) { // <-- USE THE PASSED-IN SYMBOL
+                mips_emit("j .L%s_epilogue", func_sym->name);
+            } else {
+                mips_comment("ERROR: Could not find function for return, using unknown epilogue");
+                mips_emit("j .L_unknown_epilogue");
+            }
             break;
 
         // --- Memory and Pointers ---
@@ -1619,6 +1698,32 @@ void generate_mips(TacInstr* tac_head, const char* out_filename) {
     mips_emit_text_segment(); // This will now init TEMP_FPR_ZERO
     build_basic_blocks(tac_head);
 
+    // --- NEW PRE-SCAN FOR ALL TEMPS ---
+    max_temp_id = -1; // Start at -1
+    for (TacInstr* instr = tac_head; instr; instr = instr->next) {
+        TacAddr* addrs[] = { instr->res, instr->arg1, instr->arg2 };
+        for (int i=0; i < 3; i++) {
+            if (addrs[i] && addrs[i]->kind == ADDR_TEMP) {
+                if (addrs[i]->val.temp_id > max_temp_id) {
+                    max_temp_id = addrs[i]->val.temp_id;
+                }
+            }
+        }
+    }
+    
+    // --- NEW GLOBAL ALLOCATION FOR LIVENESS ---
+    if (max_temp_id >= 0) {
+        temp_live_info = (TempLiveness*)calloc(max_temp_id + 1, sizeof(TempLiveness));
+        if (!temp_live_info) {
+            fprintf(stderr, "Fatal: Could not allocate memory for temp liveness info.\n");
+            exit(1);
+        }
+    } else {
+        temp_live_info = NULL; // No temps used at all
+    }
+    // --- END NEW ---
+
+    Symbol* current_function_symbol = NULL;
     List* current_func_vars = NULL;
     List* current_func_temps = NULL;
 
@@ -1630,15 +1735,19 @@ void generate_mips(TacInstr* tac_head, const char* out_filename) {
         if (block->start->op == TAC_BEGIN_FUNC) {
             if (current_func_vars) list_destroy(current_func_vars);
             if (current_func_temps) list_destroy(current_func_temps);
+            
+            current_function_symbol = block->start->res->val.var;
+            
+            // This function now just assigns offsets and collects lists
             current_func_vars = assign_stack_offsets(block, &current_func_temps);
         }
 
+        // This is now SAFE to call on global blocks because temp_live_info is allocated
         compute_liveness(block, current_func_vars);
         
-        // --- UPDATED: Init both descriptor sets ---
         init_gpr_desc();
         init_float_reg_desc();
-        init_addr_desc(); // AD is shared, still just one
+        init_addr_desc(); 
 
         TacInstr* instr = block->start;
         bool done = false;
@@ -1647,7 +1756,21 @@ void generate_mips(TacInstr* tac_head, const char* out_filename) {
             if (done) break;
 
             mips_comment("L%d:", instr->lineno);
-            gen_mips_for_instr(instr, block);
+            gen_mips_for_instr(instr, current_function_symbol);
+
+            if (instr->op == TAC_END_FUNC) {
+                current_function_symbol = NULL; 
+                
+                // Clear function-specific data
+                if (current_func_vars) {
+                    list_destroy(current_func_vars);
+                    current_func_vars = NULL;
+                }
+                 if (current_func_temps) {
+                    list_destroy(current_func_temps);
+                    current_func_temps = NULL;
+                }
+            }
             
             instr = instr->next;
         }
@@ -1655,6 +1778,7 @@ void generate_mips(TacInstr* tac_head, const char* out_filename) {
         store_regs_at_block_end(block);
     }
     
+    // Final cleanup
     if (current_func_vars) list_destroy(current_func_vars);
     if (current_func_temps) list_destroy(current_func_temps);
     if (temp_live_info) {
