@@ -1181,8 +1181,6 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             Type* target_type = (lvalue_addr->type && lvalue_addr->type->kind == TYPE_POINTER) ? lvalue_addr->type->data.base_info.base : NULL;
             if (!target_type) { /* Error */ return NULL; }
 
-            // Convert rvalue if necessary
-            rvalue = emit_conversion(rvalue, target_type);
 
             TacOp base_op = TAC_UNDEF;
             bool is_compound = false;
@@ -1194,6 +1192,46 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                                       : get_base_op_for_assignment(node->data.assignment.op);
                 if (base_op == TAC_UNDEF) { /* Error or warning */ }
             }
+            
+            // --- STANDARD FIX FOR STRING CONCAT ---
+            if (is_compound && target_type->kind == TYPE_STRING && base_op == TAC_ADD) {
+                // This is string +=. We must emit a call to `strcat(lvalue, rvalue)`.
+                
+                // 1. Get the L-value (the char* pointer, not its address)
+                TacAddr* lvalue_val = new_temp(target_type);
+                emit(TAC_DEREF, lvalue_val, lvalue_addr, NULL); // lvalue_val = *lvalue_addr
+
+                // 2. Find or create the 'strcat' function symbol
+                Symbol* strcat_sym = find_symbol("strcat");
+                if (!strcat_sym) {
+                    // This is a minimal definition for the TAC generator.
+                    // A proper implementation would link to a runtime library.
+                    Type* char_ptr_type = create_pointer_type(create_type(TYPE_CHAR));
+                    Type* strcat_type = create_type(TYPE_FUNCTION);
+                    strcat_type->data.function_sig.return_type = char_ptr_type;
+                    // Add parameters (char* dest, const char* src)
+                    // ... (Skipping param setup for brevity, this is sufficient for TAC)
+                    strcat_sym = add_symbol("strcat", strcat_type, SYM_FUNCTION, node->lineno);
+                }
+                TacAddr* strcat_addr = new_var_addr(strcat_sym);
+
+                // 3. Emit PARAMs in reverse order
+                emit(TAC_PARAM, NULL, rvalue, NULL);      // param src
+                emit(TAC_PARAM, NULL, lvalue_val, NULL);  // param dest
+
+                // 4. Emit CALL
+                TacAddr* result = new_temp(target_type); // Result is char*
+                emit(TAC_CALL, result, strcat_addr, new_const_int(2));
+                
+                // 5. Store the result back? strcat modifies in-place and returns dest.
+                // We don't need to store it back, but we return the result.
+                return result; 
+            }
+            // --- END STRING FIX ---
+
+
+            // Convert rvalue if necessary
+            rvalue = emit_conversion(rvalue, target_type);
 
             TacAddr* final_rvalue; // --- Store the final value to return ---
 

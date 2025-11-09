@@ -11,6 +11,10 @@
 // We will use the 10 temporary registers: $t0 - $t9
 #define NUM_TEMP_REGS 10
 
+// We will use 12 temporary float registers: $f4 - $f15
+// (MIPS uses even-numbered registers for single precision)
+#define NUM_FLOAT_REGS 12
+
 // We will also use the 8 saved registers: $s0 - $s7
 #define NUM_SAVED_REGS 8
 
@@ -30,7 +34,8 @@ typedef struct MipsRegister {
 typedef enum {
     LOC_NONE,
     LOC_MEM,
-    LOC_REG
+    LOC_GPR,  // general purpose register
+    LOC_FPR   // floating point register
 } LocationKind;
 
 typedef struct AddrLocation {
