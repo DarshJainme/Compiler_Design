@@ -62,7 +62,7 @@ int is_typename(const char* name) {
 %token CLASS DELETE FRIEND NAMESPACE NEW OVERRIDE
 %token PRIVATE PROTECTED PUBLIC THROW TRY USING VIRTUAL
 %token SCOPE_OP
-%token CATCH FINAL UNTIL FILE_TYPE
+%token CATCH FINAL UNTIL FILE_TYPE DESTRUCTOR_SYM
 
 /* --- Type Declarations for Nonterminals --- */
 %type <node> program translation_unit external_declaration
@@ -144,6 +144,7 @@ external_declaration
 
 function_definition
     : declaration_specifiers declarator compound_statement { $$ = create_function_definition_node($1, $2, $3); }
+    | declarator compound_statement { $$ = create_function_definition_node(NULL, $1, $2); }
     ;
 
 /* --- Expressions --- */
@@ -155,6 +156,9 @@ primary_expression
     | CHAR_LITERAL      { $$ = create_constant_node($1); }
     | '(' expression ')'{ $$ = $2; }
     | lambda_expression { $$ = $1; }
+    /* Add destructor forms so $Name can appear in expressions */
+    | DESTRUCTOR_SYM IDENTIFIER { $$ = create_destructor_node($2); }
+    | DESTRUCTOR_SYM TYPE_NAME  { $$ = create_destructor_node($2); }
     ;
 
 postfix_expression
@@ -510,6 +514,7 @@ enumerator
 
 class_specifier
     : CLASS class_name base_clause '{' class_member_list '}' { add_typename($2->data.stringValue); $$ = create_class_node($2->data.stringValue, $3, $5); }
+    | CLASS class_name '{' class_member_list '}'             { add_typename($2->data.stringValue); $$ = create_class_node($2->data.stringValue, NULL, $4); }
     ;
 
 class_name
@@ -543,6 +548,7 @@ class_member
     : declaration
     | function_definition
     | access_specifier ':' { $$ = $1; }
+    | init_declarator_list ';' { $$ = create_declaration_node(NULL, $1); }
     ;
 
 // adding scope resolution
@@ -574,6 +580,8 @@ declarator
 
 direct_declarator
     : IDENTIFIER                                { $$ = create_identifier_node($1); }
+    | DESTRUCTOR_SYM TYPE_NAME                  { $$ = create_destructor_node($2); }
+    | DESTRUCTOR_SYM IDENTIFIER                 { $$ = create_destructor_node($2); }
     | qualified_id                              { $$ = $1; }
     | '(' declarator ')'                        { $$ = $2; }
     | direct_declarator '[' constant_expression ']' { $$ = create_array_declarator_node($1, $3); }

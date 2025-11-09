@@ -11,7 +11,7 @@ public:
 
     // Constructor and Destructor prototypes
     Animal();
-    ~Animal();
+    $Animal();
 
     void speak();
 private:
@@ -28,7 +28,7 @@ Animal::Animal() {
 }
 
 // Define Animal destructor
-Animal::~Animal() {
+Animal::$Animal() {
     // Destructor body
 }
 
@@ -36,7 +36,7 @@ class Dog : public Animal {
 public:
     // Constructor and Destructor prototypes
     Dog();
-    ~Dog();
+    $Dog();
 
     void bark();
 };
@@ -47,7 +47,7 @@ Dog::Dog() {
 }
 
 // Define Dog destructor
-Dog::~Dog() {
+Dog::$Dog() {
     // Dog destructor body
 }
 
@@ -60,6 +60,11 @@ void Dog::bark() {
     // (example function body)
 }
 
+class c{
+    int x,y;
+    public:
+    c (int a1,int a2)
+};
 int main() {
     Animal a;
     Dog d;

@@ -9,3 +9,11 @@ int sum(int count, ...) {
 void test_variadic_function() {
     int total = sum(3, 10, 20, 30);  // Expected: 60
 }
+struct test17
+{
+    int x;
+};
+
+int main(){
+    
+}

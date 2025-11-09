@@ -115,6 +115,7 @@ ws          [ \t\r]+
 
     /* --- Literals and Identifier --- */
     /* Must be after keywords to ensure correct precedence */
+"\$"                             { return DESTRUCTOR_SYM; }
 '(\\.|[^'\\])'                  { yylval.str = strdup(yytext); return CHAR_LITERAL; }
 \"([^"\\\n]|\\.)*\"              { yylval.str = strdup(yytext); return STRING_LITERAL; }
 {letter}({letter}|{digit})*     { if (is_typename(yytext)) {

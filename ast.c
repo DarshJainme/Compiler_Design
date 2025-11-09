@@ -311,6 +311,13 @@ ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier) 
     node->data.qualified_id.identifier = identifier;
     return node;
 }
+
+ASTNode* create_destructor_node(char* name) {
+    ASTNode* node = create_node(NODE_DESTRUCTOR);
+    node->data.stringValue = strdup(name);
+    return node;
+}
+
 // --- AST Printing for Debugging ---
 
 void print_indent(int indent) {

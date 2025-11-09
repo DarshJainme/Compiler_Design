@@ -71,6 +71,7 @@ typedef enum {
     NODE_ACCESS_SPECIFIER,
     NODE_BASE_CLASS,
     NODE_QUALIFIED_ID,
+    NODE_DESTRUCTOR,
     // Utility nodes
     NODE_ARGUMENT_LIST,    // Generic list for function arguments
     NODE_LIST_ITEM         // Generic list for everything else
@@ -363,6 +364,7 @@ ASTNode* create_delete_expr_node(ASTNode* expr);
 ASTNode *create_enumerator_node(char *name, ASTNode *value);
 ASTNode *create_initializer_list_node(ASTNodeList *items);
 ASTNode* create_qualified_id_node(ASTNodeList* qualifiers, ASTNode* identifier);
+ASTNode* create_destructor_node(char* name);
 
 void print_ast(ASTNode* node, int indent);
 const char* token_to_string(int token);
