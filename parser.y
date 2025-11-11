@@ -145,6 +145,23 @@ external_declaration
 function_definition
     : declaration_specifiers declarator compound_statement { $$ = create_function_definition_node($1, $2, $3); }
     | declarator compound_statement { $$ = create_function_definition_node(NULL, $1, $2); }
+    /* Add support for qualified member function definitions */ // this is to be done for
+    | declaration_specifiers qualified_id '(' parameter_type_list ')' compound_statement {
+        ASTNode* func_decl = create_function_declarator_node($2, $4);
+        $$ = create_function_definition_node($1, func_decl, $6);
+    }
+    | declaration_specifiers qualified_id '(' ')' compound_statement {
+        ASTNode* func_decl = create_function_declarator_node($2, NULL);
+        $$ = create_function_definition_node($1, func_decl, $5);
+    }
+    | qualified_id '(' parameter_type_list ')' compound_statement {
+        ASTNode* func_decl = create_function_declarator_node($1, $3);
+        $$ = create_function_definition_node(NULL, func_decl, $5);
+    }
+    | qualified_id '(' ')' compound_statement {
+        ASTNode* func_decl = create_function_declarator_node($1, NULL);
+        $$ = create_function_definition_node(NULL, func_decl, $4);
+    }
     ;
 
 /* --- Expressions --- */
@@ -563,7 +580,17 @@ nested_name_specifier
 
 qualified_id
     : nested_name_specifier IDENTIFIER          { $$ = create_qualified_id_node($1, create_identifier_node($2)); }
-    | nested_name_specifier TYPE_NAME           { $$ = create_qualified_id_node($1, create_typename_node($2)); }
+    | nested_name_specifier TYPE_NAME           { 
+        // TYPE_NAME can be a constructor name (e.g., Animal::Animal)
+        $$ = create_qualified_id_node($1, create_identifier_node($2));  // <-- Use create_identifier_node
+    }
+    /* Add support for destructors */
+    | nested_name_specifier DESTRUCTOR_SYM IDENTIFIER { 
+        $$ = create_qualified_id_node($1, create_destructor_node($3)); 
+    }
+    | nested_name_specifier DESTRUCTOR_SYM TYPE_NAME  { 
+        $$ = create_qualified_id_node($1, create_destructor_node($3)); 
+    }
     ;
 /* --- Declarators --- */
 declarator

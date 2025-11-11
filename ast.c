@@ -379,6 +379,7 @@ void print_ast(ASTNode* node, int indent) {
         case NODE_CONSTANT: printf("Constant: %s\n", node->data.stringValue); break;
         case NODE_STRING_LITERAL: printf("String Literal: %s\n", node->data.stringValue); break;
         case NODE_TYPENAME: printf("Typename: %s\n", node->data.stringValue); break;
+        case NODE_DESTRUCTOR: printf("Destructor: ~%s\n", node->data.stringValue); break;
         case NODE_EXPRESSION_STATEMENT:
             printf("Expression Statement [line %d]\n", node->lineno);
             print_ast(node->data.expression_statement.expression, indent + 1);

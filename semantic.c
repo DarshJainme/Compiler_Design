@@ -115,6 +115,10 @@ char* get_name_from_declarator(ASTNode* declarator) {
         switch (current->type) {
             case NODE_IDENTIFIER:
                 return current->data.stringValue;
+            case NODE_TYPENAME:
+                return current->data.stringValue;
+            case NODE_DESTRUCTOR:
+                return current->data.stringValue;
             case NODE_QUALIFIED_ID:
                 return get_name_from_declarator(current->data.qualified_id.identifier);
             case NODE_POINTER_DECLARATOR:
@@ -1010,57 +1014,121 @@ void analyze_declaration(ASTNode *node)
     free(base_type);
 }
 
-// In semantic.c, replace the entire function
+
 void analyze_function_definition(ASTNode *node)
 {
     Type *return_type = get_type_from_specifiers(node->data.function_definition.specifiers);
-    const char *name = get_name_from_declarator(node->data.function_definition.declarator);
-    if (!name) { 
-        if (node->data.function_definition.declarator->type == NODE_FUNCTION_DECLARATOR &&
-             node->data.function_definition.declarator->data.function_declarator.base_declarator->type == NODE_QUALIFIED_ID)
-        {
-             // This is an out-of-class method definition.
-             // A full implementation would find the class, find the method, and analyze the body
-             // in the class's scope.
-             // For now, we'll just analyze the body in a new scope.
-             name = get_name_from_declarator(node->data.function_definition.declarator); // This will get "speak" or "bark"
-        } else {
-            fprintf(stderr, "Semantic Error (Line %d): Function definition is missing a name.\n", node->lineno);
-            semantic_errors++;
-            return; 
+    ASTNode* declarator = node->data.function_definition.declarator;
+    
+    // Extract the base declarator (might be wrapped in a function_declarator)
+    ASTNode* base_declarator = declarator;
+    if (declarator->type == NODE_FUNCTION_DECLARATOR) {
+        base_declarator = declarator->data.function_declarator.base_declarator;
+    }
+    
+    const char *name = NULL;
+    const char *class_name = NULL;
+    int is_qualified = 0;
+    
+    // Check if this is a qualified function (e.g., Animal::speak)
+    if (base_declarator && base_declarator->type == NODE_QUALIFIED_ID) {
+        is_qualified = 1;
+        
+        // Get class name from the qualifier
+        if (base_declarator->data.qualified_id.qualifiers && 
+            base_declarator->data.qualified_id.qualifiers->node) {
+            ASTNode* qualifier_node = base_declarator->data.qualified_id.qualifiers->node;
+            class_name = qualifier_node->data.stringValue;
         }
+        
+        // Get member name from the identifier
+        ASTNode* id_node = base_declarator->data.qualified_id.identifier;
+        if (id_node->type == NODE_IDENTIFIER) {
+            name = id_node->data.stringValue;
+        } else if (id_node->type == NODE_DESTRUCTOR) {
+            name = id_node->data.stringValue; // Destructor name
+        }
+    } else {
+        name = get_name_from_declarator(declarator);
+    }
+    
+    if (!name) {
+        fprintf(stderr, "Semantic Error (Line %d): Function definition is missing a name.\n", node->lineno);
+        semantic_errors++;
+        return;
     }
 
-    Type *func_type = build_type_from_declarator(return_type, node->data.function_definition.declarator);
+    Type *func_type = build_type_from_declarator(return_type, declarator);
+    
+    // For qualified functions, create a unique name and verify the class exists
+    char* symbol_name = NULL;
+    if (is_qualified && class_name) {
+        // Verify the class exists
+        Symbol* class_sym = find_symbol(class_name);
+        if (!class_sym || (class_sym->type->kind != TYPE_STRUCT && class_sym->type->kind != TYPE_UNION)) {
+            fprintf(stderr, "Semantic Error (Line %d): '%s' is not a defined class or struct.\n", 
+                    node->lineno, class_name);
+            semantic_errors++;
+            return;
+        }
+        
+        // Create qualified name like "Animal::speak"
+        symbol_name = malloc(strlen(class_name) + strlen(name) + 3);
+        sprintf(symbol_name, "%s::%s", class_name, name);
+        
+        // Verify the member exists in the class
+        Type* class_type = class_sym->type;
+        int found = 0;
+        for (Member *m = class_type->data.struct_union_info.members; m; m = m->next) {
+            if (strcmp(m->name, name) == 0) {
+                if (m->type->kind != TYPE_FUNCTION) {
+                    fprintf(stderr, "Semantic Error (Line %d): '%s' is not a member function of '%s'.\n",
+                            node->lineno, name, class_name);
+                    semantic_errors++;
+                    free(symbol_name);
+                    return;
+                }
+                found = 1;
+                break;
+            }
+        }
+        
+        if (!found) {
+            fprintf(stderr, "Semantic Error (Line %d): No member named '%s' in class '%s'.\n",
+                    node->lineno, name, class_name);
+            semantic_errors++;
+            free(symbol_name);
+            return;
+        }
+    } else {
+        symbol_name = strdup(name);
+    }
     
     // Check for existing declaration
-    Symbol* existing_sym = find_symbol(name);
+    Symbol* existing_sym = find_symbol(symbol_name);
     if (existing_sym) {
         if (existing_sym->kind != SYM_FUNCTION) {
-            fprintf(stderr, "Semantic Error (Line %d): '%s' redefined as a function, but was previously declared as something else.\n", node->lineno, name);
+            fprintf(stderr, "Semantic Error (Line %d): '%s' redefined as a function.\n", 
+                    node->lineno, symbol_name);
             semantic_errors++;
         }
-        // Here you would also compare signatures (return type, params)
-        // For now, we just use the new definition.
         existing_sym->type = func_type;
     } else {
-        add_symbol(name, func_type, SYM_FUNCTION, node->lineno);
+        add_symbol(symbol_name, func_type, SYM_FUNCTION, node->lineno);
     }
 
-    // --- NEW TWO-PASS ANALYSIS ---
+    // Two-pass analysis
     FunctionAnalysisContext context = {0};
     context.return_type = func_type->data.function_sig.return_type;
 
-    // 1. First Pass: Collect all labels (goto, case, default)
     collect_labels(node->data.function_definition.body, &context);
     
-    // 2. Second Pass: Full statement analysis
     enter_scope();
-    add_function_parameters(node->data.function_definition.declarator);
+    add_function_parameters(declarator);
     analyze_statement_with_context(node->data.function_definition.body, &context);
     leave_scope();
 
-    // Free the collected labels
+    // Free labels
     Label* current = context.labels;
     while(current) {
         Label* next = current->next;
@@ -1068,6 +1136,8 @@ void analyze_function_definition(ASTNode *node)
         free(current);
         current = next;
     }
+    
+    free(symbol_name);
 }
 
 Type *analyze_expression(ASTNode *node)
@@ -1128,13 +1198,25 @@ Type *analyze_expression(ASTNode *node)
             }
             Type* qualifier_type = qualifier_sym->type;
             if (qualifier_type->kind != TYPE_STRUCT && qualifier_type->kind != TYPE_UNION) {
-                 fprintf(stderr, "Semantic Error (Line %d): '%s' is not a class or struct.\n", node->lineno, qualifier_name);
-                 semantic_errors++;
-                 return create_type(TYPE_UNKNOWN);
+                fprintf(stderr, "Semantic Error (Line %d): '%s' is not a class or struct.\n", node->lineno, qualifier_name);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
             }
 
             // 2. Get Member Name (e.g., "count")
-            const char* member_name = node->data.qualified_id.identifier->data.stringValue;
+            ASTNode* id_node = node->data.qualified_id.identifier;
+            const char* member_name = NULL;
+            
+            // Handle both IDENTIFIER and TYPENAME (for constructors like Animal::Animal)
+            if (id_node->type == NODE_IDENTIFIER || id_node->type == NODE_TYPENAME) {
+                member_name = id_node->data.stringValue;
+            } else if (id_node->type == NODE_DESTRUCTOR) {
+                member_name = id_node->data.stringValue; // Destructor name
+            } else {
+                fprintf(stderr, "Semantic Error (Line %d): Invalid member identifier.\n", node->lineno);
+                semantic_errors++;
+                return create_type(TYPE_UNKNOWN);
+            }
 
             // 3. Find member in the class/struct's member list
             for (Member *m = qualifier_type->data.struct_union_info.members; m; m = m->next) {

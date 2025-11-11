@@ -59,12 +59,6 @@ void Animal::speak() {
 void Dog::bark() {
     // (example function body)
 }
-
-class c{
-    int x,y;
-    public:
-    c (int a1,int a2)
-};
 int main() {
     Animal a;
     Dog d;
