@@ -54,6 +54,19 @@ ASTNode* find_identifier_in_declarator(ASTNode* declarator) {
     }
     return NULL; // Return NULL if no identifier was ultimately found
 }
+static int declarator_is_pointer(ASTNode *decl) {
+    if (!decl) return 0;
+    switch (decl->type) {
+        case NODE_POINTER_DECLARATOR: return 1;
+        case NODE_ARRAY_DECLARATOR:
+            return declarator_is_pointer(decl->data.array_declarator.base_declarator);
+        case NODE_FUNCTION_DECLARATOR:
+            return declarator_is_pointer(decl->data.function_declarator.base_declarator);
+        case NODE_REFERENCE_DECLARATOR:
+            return declarator_is_pointer(decl->data.reference_declarator.base_declarator);
+        default: return 0;
+    }
+}
 
 void analyze_enum_specifier(ASTNode *node) {
     if (!node || node->type != NODE_ENUM_SPECIFIER) return;
@@ -594,7 +607,27 @@ void analyze_struct_or_union_specifier(ASTNode *node) {
 
         enter_scope();
         for (ASTNodeList* decl_item = members; decl_item; decl_item = decl_item->next) {
+            ASTNode* member_decl = decl_item->node;
             analyze_declaration(decl_item->node);
+            if (tag_name && member_decl->data.declaration.declarators) {
+                for (ASTNodeList* d = member_decl->data.declaration.declarators; d; d = d->next) {
+                    ASTNode* init_decl = d->node;
+                    ASTNodeList* specs = member_decl->data.declaration.specifiers;
+                    ASTNode* spec0 = specs ? specs->node : NULL;
+                    if (spec0 && spec0->type == NODE_STRUCT_OR_UNION_SPECIFIER &&
+                        spec0->data.struct_or_union_specifier.name &&
+                        strcmp(spec0->data.struct_or_union_specifier.name, tag_name) == 0 &&
+                        !spec0->data.struct_or_union_specifier.members &&
+                        !declarator_is_pointer(init_decl->data.init_declarator.declarator))
+                    {
+                        fprintf(stderr, "Semantic Error (Line %d): struct member '%s' must be a pointer to '%s'.\n",
+                                init_decl->lineno,
+                                get_name_from_declarator(init_decl->data.init_declarator.declarator),
+                                tag_name);
+                        semantic_errors++;
+                    }
+                }
+            }
         }
 
         Scope* member_scope = get_current_scope();

@@ -87,6 +87,7 @@ static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_lis
 static void compute_liveness(BasicBlock* block, List* vars_in_func);
 static void init_float_reg_desc();
 static int find_fpr_to_spill();
+static void emit_load_address(const char* dst_reg, TacAddr* addr);
 
 /*
 ================================================================================
@@ -1181,7 +1182,6 @@ static void free_dead_regs(TacInstr* instr) {
 
 static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIFY THIS
     const char *r_res, *r_arg1, *r_arg2;
-    char loc_buf[64];
     
     // Check type of operands
     bool is_float_op = false;
@@ -1589,7 +1589,7 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
         // --- Memory and Pointers ---
         case TAC_ADDR: // res = &arg1
             r_res = getGPR(instr, instr->res, true);
-            mips_emit("la %s, %s", r_res, get_mem_loc_str(loc_buf, 64, instr->arg1));
+            emit_load_address(r_res, instr->arg1);
             free_dead_regs(instr);
             break;
 
@@ -1822,4 +1822,16 @@ static char* get_mem_loc_str(char* buffer, int size, TacAddr* addr) {
             break;
     }
     return buffer;
+}
+static void emit_load_address(const char* dst_reg, TacAddr* addr) {
+    char buf[64];
+    get_mem_loc_str(buf, sizeof buf, addr);
+    char* paren = strchr(buf, '(');
+    if (paren && strcmp(paren, "($fp)") == 0) {
+        mips_emit("addiu %s, $fp, %d", dst_reg, atoi(buf));
+    } else if (paren && strcmp(paren, "($sp)") == 0) {
+        mips_emit("addiu %s, $sp, %d", dst_reg, atoi(buf));
+    } else {
+        mips_emit("la %s, %s", dst_reg, buf);
+    }
 }

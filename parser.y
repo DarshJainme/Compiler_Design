@@ -466,6 +466,8 @@ struct_or_union_specifier
     | UNION IDENTIFIER '{' struct_declaration_list '}'  { add_typename($2); $$ = create_struct_or_union_specifier_node(UNION, $2, $4); }
     | STRUCT '{' struct_declaration_list '}'            { $$ = create_struct_or_union_specifier_node(STRUCT, NULL, $3); }
     | UNION '{' struct_declaration_list '}'             { $$ = create_struct_or_union_specifier_node(UNION, NULL, $3); }
+    | STRUCT IDENTIFIER                                 { $$ = create_struct_or_union_specifier_node(STRUCT, $2, NULL); }
+    | UNION IDENTIFIER                                  { $$ = create_struct_or_union_specifier_node(UNION, $2, NULL); }
     | STRUCT TYPE_NAME                                 { $$ = create_struct_or_union_specifier_node(STRUCT, $2, NULL); }
     | UNION TYPE_NAME                                 { $$ = create_struct_or_union_specifier_node(UNION, $2, NULL); }
     ;
