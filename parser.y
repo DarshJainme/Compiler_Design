@@ -183,6 +183,15 @@ postfix_expression
     | postfix_expression '[' expression ']'                { $$ = create_array_subscript_node($1, $3); }
     | postfix_expression '(' ')'                           { $$ = create_func_call_node($1, NULL); }
     | postfix_expression '(' argument_expression_list ')'  { $$ = create_func_call_node($1, $3); }
+    /* for constructor calls like c(123,345) */
+    | TYPE_NAME '(' ')'                                    { 
+        ASTNode* type_node = create_typename_node($1);
+        $$ = create_func_call_node(type_node, NULL); 
+    }
+    | TYPE_NAME '(' argument_expression_list ')'           { 
+        ASTNode* type_node = create_typename_node($1);
+        $$ = create_func_call_node(type_node, $3); 
+    }
     | postfix_expression '.' IDENTIFIER                    { $$ = create_member_access_node($1, $3, 0); }
     | postfix_expression PTR_OP IDENTIFIER                 { $$ = create_member_access_node($1, $3, 1); }
     // for differentiating postfix and prefix part
