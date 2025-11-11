@@ -3,11 +3,14 @@
 #include <string.h>
 #include "symbol_table.h"
 #include "types.h"
+#include "ast.h"         
+#include "parser.tab.h"
 
 static Scope* current_scope = NULL;
 static int current_scope_level = 0;
 extern int yylineno;
 // extern int semantic_errors;
+
 void init_symbol_table() {
     if (current_scope) {
         while (current_scope->parent) {
@@ -19,6 +22,40 @@ void init_symbol_table() {
     current_scope->parent = NULL;
     current_scope->symbol_count = 0;
     current_scope_level = 0;
+
+    Type* int_type = create_type(TYPE_INT);
+
+    ASTNode* const_spec = create_specifier_node(CONST);
+    ASTNode* char_spec = create_specifier_node(CHAR);
+    ASTNodeList* spec_list = create_list_node(const_spec);
+    append_to_list(spec_list, char_spec);
+
+
+    ASTNode* ident_node = create_node(NODE_IDENTIFIER);
+    ident_node->data.stringValue = strdup("format"); 
+    
+    ASTNode* ptr_decl = create_pointer_declarator_node(NULL, ident_node); // Creates the '*'
+    
+    ASTNode* param_node = create_parameter_declaration_node(spec_list, ptr_decl);
+    
+    ASTNodeList* param_list = create_list_node(param_node);
+
+    // 3. Define 'printf'
+    Type* printf_type = create_type(TYPE_FUNCTION);
+    printf_type->data.function_sig.return_type = int_type;
+    printf_type->data.function_sig.is_variadic = true;
+    printf_type->data.function_sig.params = param_list; // Assign the param list
+    
+    add_symbol("printf", printf_type, SYM_FUNCTION, 0);
+
+    // 4. Define 'scanf'
+    Type* scanf_type = create_type(TYPE_FUNCTION);
+    scanf_type->data.function_sig.return_type = int_type;
+    scanf_type->data.function_sig.is_variadic = true;
+    scanf_type->data.function_sig.params = param_list; // Can reuse the same param list
+    
+    add_symbol("scanf", scanf_type, SYM_FUNCTION, 0);
+
 }
 
 void destroy_scope(Scope* scope) {
