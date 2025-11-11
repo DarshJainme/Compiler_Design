@@ -372,21 +372,28 @@ int is_scalar_type(Type* type) {
 
 int are_types_compatible(Type* type1, Type* type2) {
     if (!type1 || !type2) return 0;
+
+    if (type1->kind == TYPE_POINTER && type2->kind == TYPE_POINTER) {
+        Type* base1 = type1->data.base_info.base;
+        Type* base2 = type2->data.base_info.base;
+
+        if (base1 && base1->kind == TYPE_VOID) return 1; // e.g., void* = int*
+        if (base2 && base2->kind == TYPE_VOID) return 1; // e.g., int* = void* (malloc)
+
+        return are_types_compatible(base1, base2);}
+
     if (type1->kind == type2->kind) {
         if (type1->kind == TYPE_POINTER || type1->kind == TYPE_ARRAY) {
             return are_types_compatible(type1->data.base_info.base, type2->data.base_info.base);
         }
         return 1; 
     }
-    // Allow assignment between any two arithmetic types 
     if (is_arithmetic_type(type1) && is_arithmetic_type(type2)) {
         return 1;
     }
-    // allowing an integer to be assigned to an enum type.
     if (type1->kind == TYPE_ENUM && is_integer_type(type2)) {
         return 1;
     }
-    // Allow char array = string literal
     if (type1->kind == TYPE_ARRAY && type1->data.base_info.base->kind == TYPE_CHAR && type2->kind == TYPE_STRING) {
         return 1;
     }

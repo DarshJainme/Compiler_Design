@@ -56,6 +56,62 @@ void init_symbol_table() {
     
     add_symbol("scanf", scanf_type, SYM_FUNCTION, 0);
 
+    // --- 5. Define 'malloc' ---
+    // Signature: void* malloc(int size)
+
+    // 5a. Create return type: void*
+    Type* void_type = create_type(TYPE_VOID);
+    Type* void_ptr_type = create_pointer_type(void_type);
+
+    // 5b. Create AST for parameter: (int size)
+    // We need 'int' specifiers (INT comes from parser.tab.h)
+    ASTNode* int_spec = create_specifier_node(INT);
+    ASTNodeList* int_spec_list = create_list_node(int_spec);
+
+    // We need the 'size' identifier
+    ASTNode* size_ident = create_node(NODE_IDENTIFIER);
+    size_ident->data.stringValue = strdup("size"); // Use stringValue from ast.h
+
+    // We need the full parameter node
+    ASTNode* size_param_node = create_parameter_declaration_node(int_spec_list, size_ident);
+
+    // Finally, the parameter list (with just one parameter)
+    ASTNodeList* malloc_param_list = create_list_node(size_param_node);
+
+    // 5c. Create malloc function type
+    Type* malloc_type = create_type(TYPE_FUNCTION);
+    malloc_type->data.function_sig.return_type = void_ptr_type;
+    malloc_type->data.function_sig.params = malloc_param_list;
+    malloc_type->data.function_sig.is_variadic = false;
+
+    // 5d. Add to symbol table
+    add_symbol("malloc", malloc_type, SYM_FUNCTION, 0);
+
+    // --- 6. Define 'calloc' ---
+    // Signature: void* calloc(int num, int size)
+
+    // 6a. Create AST for parameter: (int num)
+    // We can reuse the int_spec_list from above
+    ASTNode* num_ident = create_node(NODE_IDENTIFIER);
+    num_ident->data.stringValue = strdup("num");
+    ASTNode* num_param_node = create_parameter_declaration_node(int_spec_list, num_ident);
+
+    // 6b. Create the parameter list: (int num, int size)
+    // We can reuse size_param_node from malloc
+    ASTNodeList* calloc_param_list = create_list_node(num_param_node);
+    append_to_list(calloc_param_list, size_param_node);
+
+    // 6c. Create calloc function type
+    // We reuse void_ptr_type from malloc
+    Type* calloc_type = create_type(TYPE_FUNCTION);
+    calloc_type->data.function_sig.return_type = void_ptr_type;
+    calloc_type->data.function_sig.params = calloc_param_list;
+    calloc_type->data.function_sig.is_variadic = false;
+
+    // 6d. Add to symbol table
+    add_symbol("calloc", calloc_type, SYM_FUNCTION, 0);
+
+
 }
 
 void destroy_scope(Scope* scope) {
