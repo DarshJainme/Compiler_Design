@@ -19,6 +19,7 @@ void analyze_class_specifier(ASTNode *node);
 void analyze_function_definition(ASTNode *node);
 void analyze_statement_with_context(ASTNode* node, FunctionAnalysisContext* context);
 char* get_name_from_declarator(ASTNode* declarator);
+void add_function_parameters(ASTNode *declarator);
 
 ASTNode* find_identifier_in_declarator(ASTNode* declarator) {
     ASTNode* current = declarator;
@@ -671,12 +672,9 @@ void analyze_class_specifier(ASTNode *node) {
     if (existing_symbol && existing_symbol->kind == SYM_TYPEDEF && (existing_symbol->type->kind == TYPE_STRUCT || existing_symbol->type->kind == TYPE_UNION)) {
         if (existing_symbol->type->data.struct_union_info.members == NULL && node->data.class_specifier.members) {
             class_type = existing_symbol->type;
-        } else if (node->data.class_specifier.members) { // Check if we are trying to redefine
-            fprintf(stderr, "Semantic Error (Line %d): Redefinition of class '%s'.\n", node->lineno, class_name);
-            semantic_errors++;
+        } else if (node->data.class_specifier.members) {
             return;
         } else {
-            // This is just a use, like `class MyClass var;`, so we do nothing.
             return;
         }
     }
@@ -688,14 +686,14 @@ void analyze_class_specifier(ASTNode *node) {
         add_typename(class_name);
     }
     
-    // Only process members if this is a definition
     if (!node->data.class_specifier.members) {
         return;
     }
 
     Member* head = NULL, *tail = NULL;
 
-     ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
+    // Copy base class members
+    ASTNodeList* base_clauses = node->data.class_specifier.base_classes;
     for (ASTNodeList* base_item = base_clauses; base_item; base_item = base_item->next) {
         ASTNode* base_specifier_node = base_item->node;
         if (base_specifier_node->type != NODE_BASE_CLASS) continue; // Use NODE_BASE_CLASS
@@ -705,20 +703,22 @@ void analyze_class_specifier(ASTNode *node) {
         Symbol* base_symbol = find_symbol(base_class_name);
 
         if (!base_symbol || base_symbol->type->kind != TYPE_STRUCT) {
-            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is not a defined class type.\n", base_specifier_node->lineno, base_class_name);
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is not a defined class type.\n", 
+                    base_specifier_node->lineno, base_class_name);
             semantic_errors++;
             continue;
         }
 
         Type* base_type = base_symbol->type;
         if (!base_type->data.struct_union_info.members) {
-            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is an incomplete type.\n", base_specifier_node->lineno, base_class_name);
+            fprintf(stderr, "Semantic Error (Line %d): Base class '%s' is an incomplete type.\n", 
+                    base_specifier_node->lineno, base_class_name);
             semantic_errors++;
             continue;
         }
 
-        // Copy members from base class
-        for (Member* base_member = base_type->data.struct_union_info.members; base_member; base_member = base_member->next) {
+        for (Member* base_member = base_type->data.struct_union_info.members; base_member; 
+             base_member = base_member->next) {
             Member* new_member = (Member*)calloc(1, sizeof(Member));
             new_member->name = strdup(base_member->name);
             new_member->type = copy_type(base_member->type);
@@ -731,14 +731,64 @@ void analyze_class_specifier(ASTNode *node) {
             }
         }
     }
-    //
 
+    // **Enter class member scope for ALL members (including constructors)**
     enter_scope();
+    
+    // **FIRST: Add all data members to this scope**
     ASTNodeList* members = node->data.class_specifier.members;
     for (ASTNodeList* member_item = members; member_item; member_item = member_item->next) {
-        analyze_node(member_item->node, NULL);
+        ASTNode* member = member_item->node;
+        
+        // Only process declarations (data members) in this first pass
+        if (member->type == NODE_DECLARATION) {
+            analyze_node(member, NULL);
+        }
+    }
+    
+    // **SECOND: Process constructors and member functions**
+    // They can now see the data members
+    for (ASTNodeList* member_item = members; member_item; member_item = member_item->next) {
+        ASTNode* member = member_item->node;
+
+        if (member->type == NODE_FUNCTION_DEFINITION) {
+            ASTNode* declarator = member->data.function_definition.declarator;
+            char* func_name = get_name_from_declarator(declarator);
+            
+            // Check if it's a constructor
+            if (func_name && strcmp(func_name, class_name) == 0) {
+                // Build constructor type
+                Type* func_type = build_type_from_declarator(create_type(TYPE_VOID), declarator);
+                
+                // **Add constructor to GLOBAL scope with qualified name**
+                char qualified_name[256];
+                snprintf(qualified_name, sizeof(qualified_name), "%s::%s", class_name, func_name);
+                
+                // **Use the new helper function to add to global scope**
+                Scope* global_scope = get_global_scope();
+                add_symbol_to_scope(global_scope, qualified_name, func_type, SYM_FUNCTION, member->lineno);
+                
+                // **Analyze constructor body WHILE IN CLASS SCOPE**
+                // This allows the body to see member variables
+                FunctionAnalysisContext context = {0};
+                context.return_type = create_type(TYPE_VOID);
+                
+                enter_scope(); // New scope for constructor parameters/locals
+                add_function_parameters(declarator);
+                analyze_statement_with_context(member->data.function_definition.body, &context);
+                leave_scope(); // Exit constructor body scope
+                
+                continue;
+            }
+        }
+        
+        // Handle other members (non-constructor member functions, etc.)
+        if (member->type != NODE_DECLARATION) {  // Already processed declarations above
+            analyze_node(member, NULL);
+        }
     }
 
+    // Collect all symbols from class scope into member list
     Scope* member_scope = get_current_scope();
     for (int i = 0; i < member_scope->symbol_count; i++) {
         Symbol* member_symbol = member_scope->symbols[i];
@@ -760,7 +810,7 @@ void analyze_class_specifier(ASTNode *node) {
             tail = new_member;
         }
     }
-    class_type->data.struct_union_info.member_scope = leave_scope();
+    class_type->data.struct_union_info.member_scope = leave_scope(); // Exit class member scope
     class_type->data.struct_union_info.members = head;
 }
 
@@ -995,6 +1045,56 @@ void analyze_declaration(ASTNode *node)
             }
             if (initializer && !is_auto)
             {
+                // Check if RHS is a constructor call: c hellow = c(123, 345);
+                if (initializer->type == NODE_FUNC_CALL && 
+                    initializer->data.func_call.function->type == NODE_TYPENAME)
+                {
+                    // Constructor style call
+                    const char* called_type_name = initializer->data.func_call.function->data.stringValue;
+                    const char* var_type_name = final_type->data.struct_union_info.name;
+
+                    if (var_type_name && called_type_name && strcmp(called_type_name, var_type_name) == 0) {
+                        // Type matches Look for constructor
+                        char constructor_name[256];
+                        snprintf(constructor_name, sizeof(constructor_name), "%s::%s", var_type_name, var_type_name);
+
+                        Symbol* constructor_sym = find_symbol(constructor_name);
+                        if (!constructor_sym) {
+                            constructor_sym = find_symbol(var_type_name); // Try simple name
+                        }
+
+                        if (constructor_sym && constructor_sym->kind == SYM_FUNCTION) {
+                            // Validate argument count and types
+                            Type* constructor_type = constructor_sym->type;
+                            ASTNodeList* expected_params = constructor_type->data.function_sig.params;
+                            ASTNodeList* actual_args = initializer->data.func_call.arguments;
+                            
+                            int expected_count = 0;
+                            int actual_count = 0;
+                            
+                            for (ASTNodeList* p = expected_params; p && p->node; p = p->next) expected_count++;
+                            for (ASTNodeList* a = actual_args; a; a = a->next) actual_count++;
+                            
+                            if (actual_count != expected_count) {
+                                fprintf(stderr, "Semantic Error (Line %d): Constructor '%s' expects %d arguments, got %d.\n",
+                                        init_decl->lineno, var_type_name, expected_count, actual_count);
+                                semantic_errors++;
+                            }
+                            // Type checking of individual arguments can be added here
+                        } else {
+                            // fprintf(stderr, "Semantic Error (Line %d): No constructor found for class '%s'.\n",
+                            //         init_decl->lineno, var_type_name);
+                            // semantic_errors++;
+                        }
+                    } else {
+                        fprintf(stderr, "Semantic Error (Line %d): Type mismatch in constructor call. Expected '%s', got '%s'.\n",
+                                init_decl->lineno, var_type_name ? var_type_name : "unknown", called_type_name ? called_type_name : "unknown");
+                        semantic_errors++;
+                    }
+                }
+                else
+                {
+                    // Regular initialization (not constructor call)
                 Type *initializer_type = analyze_expression(initializer);
                 if (!are_types_compatible(final_type, initializer_type))
                 {
@@ -1007,6 +1107,7 @@ void analyze_declaration(ASTNode *node)
                     // Insert cast node for implicit conversion
                     ASTNode *cast_node = create_cast_expr_node(create_typename_node(type_to_string(final_type)), init_decl->data.init_declarator.initializer);
                     init_decl->data.init_declarator.initializer = cast_node;
+                    }
                 }
             }
         }

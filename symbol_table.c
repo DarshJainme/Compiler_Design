@@ -248,3 +248,47 @@ void print_symbol_table(Scope* scope, int depth) {
         }
     }
 }
+
+Symbol* add_symbol_to_scope(Scope* target_scope, const char* name, Type* type, SymbolKind kind, int lineno) {
+    if (!target_scope) return NULL;
+    
+    // Check if symbol already exists in target scope
+    for (int i = 0; i < target_scope->symbol_count; i++) {
+        if (strcmp(target_scope->symbols[i]->name, name) == 0) {
+            fprintf(stderr, "Semantic Error (Line %d): Redefinition of '%s'.\n", lineno, name);
+            semantic_errors++;
+            return NULL;
+        }
+    }
+
+    if (target_scope->symbol_count >= MAX_SYMBOLS) {
+        fprintf(stderr, "Fatal: Symbol table overflow in scope.\n");
+        exit(1);
+    }
+
+    Symbol* new_symbol = (Symbol*)calloc(1, sizeof(Symbol));
+    if (!new_symbol) {
+        fprintf(stderr, "Fatal: Memory allocation failed for symbol.\n");
+        exit(1);
+    }
+    new_symbol->name = strdup(name);
+    new_symbol->type = type;
+    new_symbol->kind = kind;
+    new_symbol->line_declared = lineno;
+    new_symbol->scope_level = 0; // Global level
+    new_symbol->stack_offset = 0;
+    new_symbol->next_use = -1;
+    new_symbol->is_live = false;
+
+    target_scope->symbols[target_scope->symbol_count++] = new_symbol;
+
+    return new_symbol;
+}
+
+Scope* get_global_scope() {
+    Scope* scope = current_scope;
+    while (scope && scope->parent != NULL) {
+        scope = scope->parent;
+    }
+    return scope;
+}

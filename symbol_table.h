@@ -51,5 +51,7 @@ Symbol* find_symbol(const char* name);
 Symbol* find_symbol_in_current_scope(const char* name);
 void print_symbol_table(Scope *scope, int depth);
 const char* symbol_kind_to_string(SymbolKind kind);
+Symbol* add_symbol_to_scope(Scope* target_scope, const char* name, struct Type* type, SymbolKind kind, int lineno);
+Scope* get_global_scope();
 
 #endif // SYMBOL_TABLE

@@ -65,11 +65,11 @@ void test_enum_union() {
 // }
 
 // "Until" Loop (Simulated using do-while)
-void test_until_loop() {
+void test_loop() {
     int x = 0;
     do {
         x++;
-    } while (x < 5);  // Equivalent to "until (x >= 5)"
+    } while (x < 5); 
 }
 
 // Multi-Level Pointers
@@ -84,4 +84,7 @@ void test_multilevel_pointers() {
 void test_multidimensional_arrays() {
     int arr[2][3] = { {1, 2, 3}, {4, 5, 6} };
     int x = arr[1][2];  // Accessing element (Expected: 6)
+}
+int main(){
+    test_loop();
 }

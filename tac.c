@@ -1278,6 +1278,37 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             ASTNode* func_expr_node = node->data.func_call.function;
             TacAddr* func_addr = NULL; // Will hold the 'this' pointer for member calls
 
+            
+            // Handle constructor calls (e.g., c(123, 345))**
+            if (func_expr_node->type == NODE_TYPENAME) {
+                // This is a constructor call
+                const char* class_name = func_expr_node->data.stringValue;
+                Symbol* class_sym = find_symbol(class_name);
+                
+                if (!class_sym || class_sym->kind != SYM_TYPEDEF) {
+                    fprintf(stderr, "Error line %d: '%s' is not a valid type name.\n", 
+                            func_expr_node->lineno, class_name);
+                    return NULL;
+                }
+                
+                // Look for the constructor function (e.g., "c::c")
+                char constructor_name[256];
+                snprintf(constructor_name, sizeof(constructor_name), "%s::%s", class_name, class_name);
+                Symbol* ctor_sym = find_symbol(constructor_name);
+                
+                if (!ctor_sym || ctor_sym->kind != SYM_FUNCTION) {
+                    fprintf(stderr, "Error line %d: No constructor found for class '%s'.\n", 
+                            func_expr_node->lineno, class_name);
+                    return NULL;
+                }
+                
+                func_addr = new_var_addr(ctor_sym);
+                
+                // For constructor calls, we don't have an object address yet
+                // The caller (declaration initializer) should handle object allocation
+                // Here we just emit the constructor call with parameters
+            }
+
             // 1. Evaluate arguments and emit PARAM instructions (reverse order)
             int arg_count = 0;
             ASTNodeList* arg_list[100]; // Assume max 100 args
@@ -1291,35 +1322,26 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
                 emit(TAC_PARAM, NULL, arg_addr, NULL);
             }
 
-            // 2. Check for member function call to handle 'this' pointer
-            if (func_expr_node->type == NODE_MEMBER_ACCESS) {
-                // It's a member call (obj.func() or obj->func()).
-                // Get the address of the object to pass as the 'this' pointer.
-                func_addr = gen_tac_for_expr(func_expr_node->data.member_access.object, true);
-                if (!func_addr) return NULL;
-
-                // Pass the 'this' pointer. As we are pushing in reverse, this will be
-                // emitted AFTER the other arguments to become the FIRST argument.
-                emit(TAC_PARAM, NULL, func_addr, NULL);
-                arg_count++; // Increment arg count for the 'this' pointer
-                // Get the address of the MEMBER FUNCTION itself.
-                // The semantic analyzer should have attached the function's symbol to the node.
-                if (!func_expr_node->symbol) {
-                     fprintf(stderr, "Compiler Error line %d: Member function access node not annotated with symbol.\n", func_expr_node->lineno);
-                     return NULL;
+            // 2. Check for member function call (if not already handled as constructor)
+            if (!func_addr && func_expr_node->type == NODE_MEMBER_ACCESS) {
+                // Handle member function calls
+                TacAddr* obj_addr = gen_tac_for_expr(func_expr_node->data.member_access.object, true);
+                if (obj_addr) {
+                    emit(TAC_PARAM, NULL, obj_addr, NULL);
+                    arg_count++;
                 }
                 func_addr = new_var_addr(func_expr_node->symbol);
-            } else {
-                // It is a normal C-style call (e.g. factorial(5))
-                
+            } else if (!func_addr) {
+                // Handle direct function calls vs function pointers
                 // If it's a direct call to a function (like 'factorial'), the node is an identifier
                 // with a symbol attached by the semantic analyzer.
                 if (func_expr_node->type == NODE_IDENTIFIER && func_expr_node->symbol) {
                     // Directly use the symbol for the function. This avoids the extra "t = &func" step.
+                    // This prevents emitting TAC_ADDR for functions!
                     func_addr = new_var_addr(func_expr_node->symbol);
                 } else {
-                    // For more complex cases (like calling a function pointer),
-                    // we still need to evaluate the expression to get the address.
+                    // For more complex cases (like calling a function pointer or array of function pointers),
+                    // we need to evaluate the expression to get the address.
                     func_addr = gen_tac_for_expr(func_expr_node, false);
                 }
             }
@@ -1336,13 +1358,14 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
             // Get return type from the function's type, not the object's
             Type* func_type = func_addr->type;
             if (func_type && func_type->kind == TYPE_POINTER && func_type->data.base_info.base->kind == TYPE_FUNCTION) {
-                 func_type = func_type->data.base_info.base; // Handle function pointers
+                func_type = func_type->data.base_info.base; // Handle function pointers
             }
             if (func_type && func_type->kind == TYPE_FUNCTION) {
-                 return_type = func_type->data.function_sig.return_type;
+                return_type = func_type->data.function_sig.return_type;
             } else {
-                 fprintf(stderr, "Warning line %d: Cannot determine return type of called function.\n", node->lineno);
-                 return_type = create_type(TYPE_INT); // Assume int if unknown
+                fprintf(stderr, "Error line %d: Called object type is not a function (got %s).\n", 
+                        node->lineno, type_to_string(func_type));
+                return_type = create_type(TYPE_UNKNOWN);
             }
 
             if (return_type && return_type->kind != TYPE_VOID) {
@@ -1657,6 +1680,7 @@ void gen_tac_for_node(ASTNode* node) {
                     break; // Skip TAC generation for typedefs
                 }
             }
+            
             for (ASTNodeList* d_item = node->data.declaration.declarators; d_item; d_item = d_item->next) {
                 ASTNode* init_decl = d_item->node;
                 ASTNode* declarator = init_decl->data.init_declarator.declarator;
@@ -1669,65 +1693,128 @@ void gen_tac_for_node(ASTNode* node) {
                     // For a qualified ID, the symbol is on the qualified_id node itself.
                     // We don't need to traverse further.
                 } 
-                else{
-
+                else {
                     while (id_node && id_node->type != NODE_IDENTIFIER) {
-                        if (id_node->type == NODE_POINTER_DECLARATOR) id_node = id_node->data.pointer_declarator.base_declarator;
-                        else if (id_node->type == NODE_ARRAY_DECLARATOR) id_node = id_node->data.array_declarator.base_declarator;
-                        else if (id_node->type == NODE_FUNCTION_DECLARATOR) id_node = id_node->data.function_declarator.base_declarator;
-                        else if (id_node->type == NODE_REFERENCE_DECLARATOR) id_node = id_node->data.reference_declarator.base_declarator;
+                        if (id_node->type == NODE_POINTER_DECLARATOR) 
+                            id_node = id_node->data.pointer_declarator.base_declarator;
+                        else if (id_node->type == NODE_ARRAY_DECLARATOR) 
+                            id_node = id_node->data.array_declarator.base_declarator;
+                        else if (id_node->type == NODE_FUNCTION_DECLARATOR) 
+                            id_node = id_node->data.function_declarator.base_declarator;
+                        else if (id_node->type == NODE_REFERENCE_DECLARATOR) 
+                            id_node = id_node->data.reference_declarator.base_declarator;
                         else id_node = NULL; // Should not happen
                     }
                 }
                 
-                if (!id_node || id_node->type != NODE_IDENTIFIER) continue; // No identifier (e.g., abstract declarator)
-                if (!id_node->symbol) { // Safety check
-                     fprintf(stderr, "Compiler Error line %d: No symbol for identifier '%s' in declarator.\n", id_node->lineno, id_node->data.stringValue);
-                     continue;
+                if (!id_node || id_node->type != NODE_IDENTIFIER) continue;
+                if (!id_node->symbol) {
+                    fprintf(stderr, "Compiler Error line %d: No symbol for identifier '%s' in declarator.\n", 
+                            id_node->lineno, id_node->data.stringValue);
+                    continue;
                 }
 
                 // 2. Handle the initializer
                 if (initializer) {
-                    // Get the address of the variable being declared (e.g., `&arr`, `&ptr`, `&a`)
-                    TacAddr* lvalue_addr = gen_tac_for_expr(id_node, true);
-                    if (!lvalue_addr) continue;
-
-                    Type* target_type = id_node->symbol->type;
+                    Symbol* var_sym = id_node->symbol;
+                    Type* target_type = var_sym->type;
                     if (!target_type) continue;
 
+                    // **Check if RHS is a constructor call: c hellow = c(123, 345);**
+                    if (initializer->type == NODE_FUNC_CALL && 
+                        initializer->data.func_call.function->type == NODE_TYPENAME)
+                    {
+                        const char* called_type_name = initializer->data.func_call.function->data.stringValue;
+                        const char* var_type_name = (target_type->kind == TYPE_STRUCT || target_type->kind == TYPE_UNION) 
+                                                    ? target_type->data.struct_union_info.name : NULL;
+                        
+                        if (var_type_name && called_type_name && strcmp(called_type_name, var_type_name) == 0) {
+                            // Look for constructor with qualified name first
+                            char constructor_name[256];
+                            snprintf(constructor_name, sizeof(constructor_name), "%s::%s", var_type_name, var_type_name);
+                            
+                            Symbol* constructor_sym = find_symbol(constructor_name);
+                            if (!constructor_sym) {
+                                // Try without qualification
+                                constructor_sym = find_symbol(var_type_name);
+                            }
+                            
+                            if (constructor_sym && constructor_sym->kind == SYM_FUNCTION) {
+                                // **Emit constructor call TAC**
+                                
+                                // 1. Get the address of the object being constructed
+                                TacAddr* obj_addr = new_var_addr(var_sym);
+                                TacAddr* this_ptr = new_temp(create_pointer_type(target_type));
+                                emit(TAC_ADDR, this_ptr, obj_addr, NULL);
+                                
+                                // 2. Collect arguments in an array for reverse emission
+                                int arg_count = 1; // Start with 1 for 'this'
+                                ASTNodeList* arg_array[100];
+                                int num_args = 0;
+                                
+                                for (ASTNodeList* arg_item = initializer->data.func_call.arguments; 
+                                    arg_item && num_args < 100; 
+                                    arg_item = arg_item->next) {
+                                    arg_array[num_args++] = arg_item;
+                                }
+                                
+                                // 3. Emit parameters in reverse order (constructor args first, then 'this')
+                                for (int j = num_args - 1; j >= 0; j--) {
+                                    TacAddr* arg_val = gen_tac_for_expr(arg_array[j]->node, false);
+                                    if (arg_val) {
+                                        emit(TAC_PARAM, NULL, arg_val, NULL);
+                                        arg_count++;
+                                    }
+                                }
+                                
+                                // 4. Emit 'this' pointer as last parameter (first in the actual call)
+                                emit(TAC_PARAM, NULL, this_ptr, NULL);
+                                
+                                // 5. Emit CALL instruction
+                                TacAddr* constructor_addr = new_var_addr(constructor_sym);
+                                emit(TAC_CALL, NULL, constructor_addr, new_const_int(arg_count));
+                                
+                                continue; // Skip normal initializer handling
+                            } else {
+                                fprintf(stderr, "Error line %d: No constructor found for class '%s'.\n", 
+                                        initializer->lineno, var_type_name);
+                                // Fall through to regular initialization
+                            }
+                        }
+                    }
+
+                    // **Regular initialization (not constructor)**
+                    // Get the address of the variable
+                    TacAddr* lvalue_addr = new_var_addr(var_sym);
+                    
                     if (initializer->type == NODE_INITIALIZER_LIST) {
-                         int total_byte_offset = 0;
-                         gen_tac_for_init_list_recursive(lvalue_addr, target_type, initializer->data.items_list, &total_byte_offset);
+                        int total_byte_offset = 0;
+                        gen_tac_for_init_list_recursive(lvalue_addr, target_type, initializer->data.items_list, &total_byte_offset);
                     } 
-                    // --- ADD THIS NEW ELSE-IF BLOCK ---
                     else if (target_type->kind == TYPE_ARRAY &&
-                               target_type->data.base_info.base->kind == TYPE_CHAR &&
-                               initializer->type == NODE_STRING_LITERAL) 
+                            target_type->data.base_info.base->kind == TYPE_CHAR &&
+                            initializer->type == NODE_STRING_LITERAL) 
                     {
                         // Special case: char arr[] = "Hello";
-                        // Emit a series of byte stores for each character, including '\0'
                         char* str = initializer->data.stringValue;
                         int len = strlen(str);
                         Type* char_type = create_type(TYPE_CHAR);
                         
                         for (int i = 0; i <= len; i++) { // Include the null terminator
-                            // We treat chars as their integer values in TAC
                             TacAddr* char_val = new_const_int((int)str[i]);
-                            TacAddr* offset = new_const_int(i); // Byte offset
+                            TacAddr* offset = new_const_int(i);
                             
                             TacAddr* elem_addr = new_temp(create_pointer_type(char_type));
                             emit(TAC_ADD, elem_addr, lvalue_addr, offset);
                             emit(TAC_STORE, elem_addr, char_val, NULL);
                         }
-                        // Note: We don't free char_type, it's a lightweight non-malloc'd struct
                     }
-                    // --- END OF NEW BLOCK ---
                     else {
+                        // Simple scalar initialization
                         TacAddr* rvalue = gen_tac_for_expr(initializer, false);
                         if (!rvalue) continue;
                         rvalue = emit_conversion(rvalue, target_type);
-                        // --- Use res=address, arg1=value for STORE ---
-                        emit(TAC_STORE, lvalue_addr, rvalue, NULL);
+                        emit(TAC_ASSIGN, lvalue_addr, rvalue, NULL);
                     }
                 }
             }
