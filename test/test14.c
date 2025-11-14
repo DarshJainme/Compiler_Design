@@ -10,7 +10,7 @@ int main() {
     }
 
     // At this point, counter should be 10.
-    
+
     int another_counter = 5;
     
     // This loop should not execute at all.

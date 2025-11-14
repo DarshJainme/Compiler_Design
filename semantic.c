@@ -753,7 +753,39 @@ void analyze_class_specifier(ASTNode *node) {
 
         if (member->type == NODE_FUNCTION_DEFINITION) {
             ASTNode* declarator = member->data.function_definition.declarator;
+    
+            // Get the actual declarator identifier (might be wrapped in FUNCTION_DECLARATOR)
+            ASTNode* base_declarator = declarator;
+            if (declarator->type == NODE_FUNCTION_DECLARATOR) {
+                base_declarator = declarator->data.function_declarator.base_declarator;
+            }
+
             char* func_name = get_name_from_declarator(declarator);
+
+            // Check if it's a DESTRUCTOR first otherwise, there will be an issue in name part..
+            if (base_declarator && base_declarator->type == NODE_DESTRUCTOR) {
+                // This is a destructor, not a constructor
+                // Build destructor type
+                Type* destructor_type = build_type_from_declarator(create_type(TYPE_VOID), declarator);
+                
+                // Add destructor to GLOBAL scope with qualified name
+                char qualified_name[256];
+                snprintf(qualified_name, sizeof(qualified_name), "%s::$%s", class_name, func_name);
+                
+                Scope* global_scope = get_global_scope();
+                add_symbol_to_scope(global_scope, qualified_name, destructor_type, SYM_FUNCTION, member->lineno);
+                
+                // **Analyze destructor body WHILE IN CLASS SCOPE**
+                FunctionAnalysisContext context = {0};
+                context.return_type = create_type(TYPE_VOID);
+                
+                enter_scope(); // New scope for destructor body
+                // Destructors have no parameters (except implicit 'this')
+                analyze_statement_with_context(member->data.function_definition.body, &context);
+                leave_scope();
+                
+                continue; // Skip to next member
+            }
             
             // Check if it's a constructor
             if (func_name && strcmp(func_name, class_name) == 0) {

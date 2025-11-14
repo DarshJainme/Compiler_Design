@@ -28,6 +28,74 @@ typedef struct ControlFlowContext {
 static ControlFlowContext control_flow_stack[MAX_LOOP_SWITCH_DEPTH];
 static int control_flow_stack_top = -1;
 
+// Structure to track objects that need destruction**
+typedef struct DestructorEntry {
+    Symbol* object_symbol;      // The variable to destroy
+    Symbol* destructor_symbol;  // The destructor function
+    struct DestructorEntry* next;
+} DestructorEntry;
+
+// Stack of destructor lists (one per scope)**
+typedef struct DestructorScope {
+    DestructorEntry* entries;
+    struct DestructorScope* parent;
+} DestructorScope;
+
+static DestructorScope* destructor_scope_stack = NULL;
+
+// Helper functions
+static void push_destructor_scope(void) {
+    DestructorScope* new_scope = (DestructorScope*)calloc(1, sizeof(DestructorScope));
+    new_scope->parent = destructor_scope_stack;
+    destructor_scope_stack = new_scope;
+}
+
+static void pop_destructor_scope(void) {
+    if (!destructor_scope_stack) return;
+    DestructorScope* old_scope = destructor_scope_stack;
+    destructor_scope_stack = old_scope->parent;
+    
+    // Free entries
+    DestructorEntry* entry = old_scope->entries;
+    while (entry) {
+        DestructorEntry* next = entry->next;
+        free(entry);
+        entry = next;
+    }
+    free(old_scope);
+}
+
+static void register_object_for_destruction(Symbol* obj_sym, Symbol* dtor_sym) {
+    if (!destructor_scope_stack) return;
+    
+    DestructorEntry* new_entry = (DestructorEntry*)calloc(1, sizeof(DestructorEntry));
+    new_entry->object_symbol = obj_sym;
+    new_entry->destructor_symbol = dtor_sym;
+    
+    // Add to front of list (so destruction happens in reverse order)
+    new_entry->next = destructor_scope_stack->entries;
+    destructor_scope_stack->entries = new_entry;
+}
+
+static void emit_destructors_for_current_scope(void) {
+    if (!destructor_scope_stack) return;
+    
+    // Emit destructor calls for all objects in current scope
+    for (DestructorEntry* entry = destructor_scope_stack->entries; entry; entry = entry->next) {
+        // Get address of object
+        TacAddr* obj_var_addr = new_var_addr(entry->object_symbol);
+        TacAddr* obj_ptr = new_temp(create_pointer_type(entry->object_symbol->type));
+        emit(TAC_ADDR, obj_ptr, obj_var_addr, NULL);
+        
+        // Pass 'this' pointer
+        emit(TAC_PARAM, NULL, obj_ptr, NULL);
+        
+        // Call destructor
+        TacAddr* dtor_addr = new_var_addr(entry->destructor_symbol);
+        emit(TAC_CALL, NULL, dtor_addr, new_const_int(1));
+    }
+}
+
 void push_control_flow(TacAddr* break_lbl, TacAddr* continue_lbl) {
     if (control_flow_stack_top < MAX_LOOP_SWITCH_DEPTH - 1) {
         control_flow_stack_top++;
@@ -1774,6 +1842,15 @@ void gen_tac_for_node(ASTNode* node) {
                                 TacAddr* constructor_addr = new_var_addr(constructor_sym);
                                 emit(TAC_CALL, NULL, constructor_addr, new_const_int(arg_count));
                                 
+                                // Register this object for destruction**
+                                char destructor_name[256];
+                                snprintf(destructor_name, sizeof(destructor_name), "%s::$%s", 
+                                        var_type_name, var_type_name);
+                                
+                                Symbol* destructor_sym = find_symbol(destructor_name);
+                                if (destructor_sym && destructor_sym->kind == SYM_FUNCTION) {
+                                    register_object_for_destruction(var_sym, destructor_sym);
+                                }
                                 continue; // Skip normal initializer handling
                             } else {
                                 fprintf(stderr, "Error line %d: No constructor found for class '%s'.\n", 
@@ -1822,7 +1899,10 @@ void gen_tac_for_node(ASTNode* node) {
         }
         case NODE_FUNCTION_DEFINITION: {
             char* func_name = get_name_from_declarator(node->data.function_definition.declarator);
-            if (!func_name) { /* Error */ return; }
+            if (!func_name) { 
+                fprintf(stderr, "Compiler Error line %d: Function symbol not found during TAC generation.\n", node->lineno);
+                return;
+            }
             Symbol* func_sym = find_symbol(func_name);
             TacAddr* func_label = func_sym ? new_var_addr(func_sym) : NULL;
             if (!func_label) { // Should not happen if semantic analysis passed
@@ -1835,23 +1915,22 @@ void gen_tac_for_node(ASTNode* node) {
 
             destroy_label_map(); // Clear any previous map
             find_all_labels_in_body(node->data.function_definition.body); // Pre-pass
-            // --- END NEW ---
 
             emit(TAC_BEGIN_FUNC, func_label, NULL, NULL);
 
+            push_destructor_scope();
+
             gen_tac_for_node(node->data.function_definition.body);
 
-            // Ensure there's a return for void functions or if last statement isn't return
+            // Only emit destructors if there's NO explicit return**
             if (!tac_list_tail || (tac_list_tail->op != TAC_RETURN && tac_list_tail->op != TAC_GOTO)) {
-                if (func_sym && func_sym->type && func_sym->type->kind == TYPE_FUNCTION &&
-                    func_sym->type->data.function_sig.return_type->kind == TYPE_VOID) {
-                    emit(TAC_RETURN, NULL, NULL, NULL); 
-                } else {
-                    // Non-void function ending without return - semantic error
-                    // We'll emit a return without a value, which is fine
-                     emit(TAC_RETURN, NULL, NULL, NULL);
-                }
+                // No explicit return found, emit destructors and return
+                emit_destructors_for_current_scope();
+                emit(TAC_RETURN, NULL, NULL, NULL);
             }
+            // If there WAS an explicit return, destructors were already emitted in NODE_RETURN_STATEMENT
+            // Clean up destructor scope
+            pop_destructor_scope();
 
             emit(TAC_END_FUNC, func_label, NULL, NULL); // Marker for end
             break;
@@ -1995,16 +2074,23 @@ void gen_tac_for_node(ASTNode* node) {
             TacAddr* retval = NULL;
             if (node->data.return_statement.expression) {
                 retval = gen_tac_for_expr(node->data.return_statement.expression, false);
-                 if (!retval) {
-                     fprintf(stderr, "Error line %d: Failed to generate TAC for return expression.\n", node->lineno);
-                     // Emit return without value as fallback?
-                     emit(TAC_RETURN, NULL /* No result reg needed */, NULL /* No value */, NULL);
-                 } else {
-                     emit(TAC_RETURN, NULL /* No result reg needed */, retval /* Value to return */, NULL);
-                 }
-            } else {
-                 emit(TAC_RETURN, NULL, NULL, NULL); // Void return
             }
+            
+            // Emit destructors for ALL scopes before returning
+            // Unwind all destructor scopes from current to function level
+            DestructorScope* scope = destructor_scope_stack;
+            while (scope) {
+                for (DestructorEntry* entry = scope->entries; entry; entry = entry->next) {
+                    TacAddr* obj_var_addr = new_var_addr(entry->object_symbol);
+                    TacAddr* obj_ptr = new_temp(create_pointer_type(entry->object_symbol->type));
+                    emit(TAC_ADDR, obj_ptr, obj_var_addr, NULL);
+                    emit(TAC_PARAM, NULL, obj_ptr, NULL);
+                    emit(TAC_CALL, NULL, new_var_addr(entry->destructor_symbol), new_const_int(1));
+                }
+                scope = scope->parent;
+            }
+            
+            emit(TAC_RETURN, retval, NULL, NULL);
             break;
         }
 
