@@ -10,8 +10,12 @@ public:
     static int count;   // static member
 
     // Constructor and Destructor prototypes
-    Animal();
-    $Animal();
+    Animal(){
+        count++;
+    }
+    $Animal(){
+        
+    }
 
     void speak();
 private:
@@ -60,8 +64,8 @@ void Dog::bark() {
     // (example function body)
 }
 int main() {
-    Animal a;
-    Dog d;
+    Animal a=Animal ();
+    Dog d= Dog ();
     a.age = 5;
 
     d.age = 3;
