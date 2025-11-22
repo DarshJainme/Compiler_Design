@@ -88,6 +88,7 @@ static void compute_liveness(BasicBlock* block, List* vars_in_func);
 static void init_float_reg_desc();
 static int find_fpr_to_spill();
 static void emit_load_address(const char* dst_reg, TacAddr* addr);
+static void mips_emit_stdlib();
 
 /*
 ================================================================================
@@ -624,15 +625,36 @@ static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_lis
         if (block) block = block->next;
     }
 
-    // --- Assign offsets ---
-    // Assign offsets to locals
+    // --- NEW OFFSET ASSIGNMENT LOGIC ---
+    
+    // Standard MIPS Stack Frame:
+    // ...
+    // 8($fp)  -> Argument 1 (passed by caller)
+    // 4($fp)  -> Return Address (Saved by us)
+    // 0($fp)  -> Old FP (Saved by us)
+    // -4($fp) -> Local 1
+    
+    int param_offset_counter = 8; // Start parameters above RA and FP
+
     for (ListNode* n = list_begin(vars_in_func); n; n = list_next(n)) {
         Symbol* s = (Symbol*)list_get_data(n);
-        int size = get_type_size(s->type);
-        if (size == 0) size = 4; // Default to 4 bytes if size is unknown (e.g. void*)
-        current_stack_offset -= size; // Allocate space
-        s->stack_offset = current_stack_offset;
-        mips_comment("Assigning stack offset %d to %s (size %d)", s->stack_offset, s->name, size);
+        
+        if (s->is_param) {
+            // It is a parameter: Positive Offset
+            s->stack_offset = param_offset_counter;
+            param_offset_counter += 4; // Assuming 4-byte params/pointers
+            mips_comment("Param '%s' at %d($fp)", s->name, s->stack_offset);
+        } else {
+            // It is a local variable: Negative Offset
+            int size = get_type_size(s->type);
+            if (size <= 0) size = 4;
+            // Align to 4 bytes
+            if (size % 4 != 0) size += (4 - (size % 4));
+            
+            current_stack_offset -= size;
+            s->stack_offset = current_stack_offset;
+            mips_comment("Local '%s' at %d($fp)", s->name, s->stack_offset);
+        }
     }
     
     // Assign offsets to temporaries
@@ -729,6 +751,18 @@ static void mips_emit_prologue(Symbol* func_sym) {
     if (frame_size > 0) {
         mips_emit("subu $sp, $sp, %d", frame_size);
         mips_comment("Stack frame size: %d bytes (for locals/temps)", frame_size);
+    }
+
+    if (strcmp(func_sym->name, "main") == 0) {
+        // In MIPS, main gets argc in $a0, argv in $a1.
+        // But our symbol table likely assigned them stack offsets as parameters.
+        // We need to save the registers into those stack slots so the code can use them.
+        
+        // We iterate scope to find argc/argv? 
+        // Or just assume they are at 8($fp) and 12($fp) because they are params.
+        mips_emit("# Save CLI Args to Stack Params");
+        mips_emit("sw $a0, 8($fp)");  // argc
+        mips_emit("sw $a1, 12($fp)"); // argv
     }
 }
 
@@ -1548,7 +1582,54 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             break;
             
         case TAC_CALL:
-            // NOTE: This does not yet handle runtime lib calls like strcat
+            // ** 1. Check for Dynamic Memory Allocation **
+            if (strcmp(instr->arg1->val.var->name, "malloc") == 0) {
+                // malloc(size) -> Syscall 9 (sbrk)
+                // Argument is on stack at 0($sp) because we just pushed it.
+                
+                mips_emit("# System Call: malloc");
+                mips_emit("lw $a0, 0($sp)"); // Load size
+                mips_emit("li $v0, 9");      // sbrk code
+                mips_emit("syscall");
+                
+                // Clean up stack (pop size)
+                mips_emit("addu $sp, $sp, 4");
+                
+                // Result in $v0
+                if (instr->res) {
+                    const char* r_res = getGPR(instr, instr->res, true);
+                    mips_emit("move %s, $v0", r_res);
+                }
+                free_dead_regs(instr);
+                break; // Done
+            }
+            
+            if (strcmp(instr->arg1->val.var->name, "calloc") == 0) {
+                // calloc(num, size) -> We will treat as malloc(num * size) for simplicity
+                // or just return 0 memory. MIPS sbrk returns zeroed memory usually? 
+                // Actually, sbrk memory isn't guaranteed zeroed in all simulators, 
+                // but implementing a memset loop here is hard in 3AC.
+                // Let's map it to sbrk for now.
+                
+                // Stack: [num] [size] (Top)
+                mips_emit("# System Call: calloc (simplified to sbrk)");
+                mips_emit("lw $t0, 4($sp)"); // num
+                mips_emit("lw $t1, 0($sp)"); // size
+                mips_emit("mul $a0, $t0, $t1"); // $a0 = num * size
+                mips_emit("li $v0, 9");
+                mips_emit("syscall");
+                
+                mips_emit("addu $sp, $sp, 8"); // Pop 2 args
+                
+                if (instr->res) {
+                    const char* r_res = getGPR(instr, instr->res, true);
+                    mips_emit("move %s, $v0", r_res);
+                }
+                free_dead_regs(instr);
+                break;
+            }
+
+            // ** 2. Emit Function Call **
             mips_emit("jal %s", instr->arg1->val.var->name);
             if (instr->arg2->kind == ADDR_CONSTANT_INT) {
                 int num_params = instr->arg2->val.const_int;
@@ -1696,6 +1777,11 @@ void generate_mips(TacInstr* tac_head, const char* out_filename) {
 
     mips_emit_data_segment(tac_head);
     mips_emit_text_segment(); // This will now init TEMP_FPR_ZERO
+
+    // --- Emit Standard Library Functions ---
+    mips_emit_stdlib(); 
+    // ---------------------------------------
+    
     build_basic_blocks(tac_head);
 
     // --- NEW PRE-SCAN FOR ALL TEMPS ---
@@ -1834,4 +1920,89 @@ static void emit_load_address(const char* dst_reg, TacAddr* addr) {
     } else {
         mips_emit("la %s, %s", dst_reg, buf);
     }
+}
+
+static void mips_emit_stdlib() {
+    mips_comment("--- Built-in Standard Library ---");
+
+    // --- PRINTF implementation (simplified) ---
+    mips_emit("printf:");
+    mips_emit("  subu $sp, $sp, 8");
+    mips_emit("  sw $ra, 4($sp)");
+    mips_emit("  sw $fp, 0($sp)");
+    mips_emit("  move $fp, $sp");
+    
+    // 8($fp) is fmt string, 12($fp) is first arg
+    mips_emit("  lw $t0, 8($fp)"); 
+    mips_emit("  addiu $t1, $fp, 12"); 
+    
+    mips_emit("printf_loop:");
+    mips_emit("  lb $t2, 0($t0)"); 
+    mips_emit("  beqz $t2, printf_end"); 
+    
+    mips_emit("  li $t3, 37"); // '%'
+    mips_emit("  beq $t2, $t3, printf_fmt"); 
+    
+    // Print char
+    mips_emit("  move $a0, $t2");
+    mips_emit("  li $v0, 11"); 
+    mips_emit("  syscall");
+    mips_emit("  addiu $t0, $t0, 1");
+    mips_emit("  j printf_loop");
+    
+    mips_emit("printf_fmt:");
+    mips_emit("  addiu $t0, $t0, 1"); 
+    mips_emit("  lb $t2, 0($t0)");    
+    
+    // %d
+    mips_emit("  li $t3, 100"); // 'd'
+    mips_emit("  beq $t2, $t3, printf_int");
+    
+    // %s
+    mips_emit("  li $t3, 115"); // 's'
+    mips_emit("  beq $t2, $t3, printf_str");
+    
+    mips_emit("  addiu $t0, $t0, 1");
+    mips_emit("  j printf_loop");
+    
+    mips_emit("printf_int:");
+    mips_emit("  lw $a0, 0($t1)"); 
+    mips_emit("  li $v0, 1");      
+    mips_emit("  syscall");
+    mips_emit("  addiu $t1, $t1, 4"); 
+    mips_emit("  addiu $t0, $t0, 1"); 
+    mips_emit("  j printf_loop");
+
+    mips_emit("printf_str:");
+    mips_emit("  lw $a0, 0($t1)"); 
+    mips_emit("  li $v0, 4");      
+    mips_emit("  syscall");
+    mips_emit("  addiu $t1, $t1, 4");
+    mips_emit("  addiu $t0, $t0, 1");
+    mips_emit("  j printf_loop");
+
+    mips_emit("printf_end:");
+    mips_emit("  move $sp, $fp");
+    mips_emit("  lw $ra, 4($sp)");
+    mips_emit("  lw $fp, 0($sp)");
+    mips_emit("  addiu $sp, $sp, 8");
+    mips_emit("  jr $ra");
+    
+    // --- SCANF implementation (Basic integer) ---
+    mips_emit("scanf:");
+    mips_emit("  subu $sp, $sp, 8");
+    mips_emit("  sw $ra, 4($sp)");
+    mips_emit("  sw $fp, 0($sp)");
+    mips_emit("  move $fp, $sp");
+    
+    mips_emit("  li $v0, 5"); // read_int
+    mips_emit("  syscall");
+    mips_emit("  lw $t0, 12($fp)"); // Get pointer to int
+    mips_emit("  sw $v0, 0($t0)");  
+    
+    mips_emit("  move $sp, $fp");
+    mips_emit("  lw $ra, 4($sp)");
+    mips_emit("  lw $fp, 0($sp)");
+    mips_emit("  addiu $sp, $sp, 8");
+    mips_emit("  jr $ra");
 }

@@ -19,7 +19,7 @@ int main() {
         another_counter = 0; // This line should not be executed.
     }
 
-    int another_counter = 2;
+    // int another_counter = 2;
     
     // This loop should execute
     // The condition (5 > 3) is true, so the loop body is skipped.

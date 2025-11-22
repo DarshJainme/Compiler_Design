@@ -1475,81 +1475,71 @@ TacAddr* gen_tac_for_expr(ASTNode* node, bool is_lvalue) {
          }
 
         case NODE_ARRAY_SUBSCRIPT: {
-            // 1. Traverse inwards to find the base identifier/expression
-            ASTNode* base_expr_node = node;
-            ASTNodeList* subscript_list = NULL;
-            int num_subscripts = 0;
-            while (base_expr_node && base_expr_node->type == NODE_ARRAY_SUBSCRIPT) {
-                // Prepend index node to list (builds list in reverse order of access)
-                ASTNodeList* new_item = create_list_node(base_expr_node->data.array_subscript.index);
-                new_item->next = subscript_list;
-                subscript_list = new_item;
-                num_subscripts++;
-                base_expr_node = base_expr_node->data.array_subscript.array;
-            }
+            // Standard C approach: Peel off subscripts one by one.
+            // arr[i][j] -> deref( (arr + i*size_row) + j*size_int )
+            
+            // 1. Handle the Base (Array/Pointer)
+            TacAddr* base_addr = gen_tac_for_expr(node->data.array_subscript.array, false);
+            TacAddr* index_val = gen_tac_for_expr(node->data.array_subscript.index, false);
+            
+            if (!base_addr || !index_val) return NULL;
 
-            if (!base_expr_node) return NULL; // Should not happen
-
-            // 2. Get the base address and the full type of the base array/pointer
-            TacAddr* base_addr = gen_tac_for_expr(base_expr_node, false); // Get base addr (e.g., &arr or ptr_value)
-            if (!base_addr || !base_addr->type) return NULL;
-
+            // Check the type we are indexing into
             Type* base_type = base_addr->type;
-            Type* final_element_type = base_type; // Will hold type after all subscripts
+            Type* pointed_to_type = NULL;
 
-            // Adjust base_addr and base_type if the base itself is an array (array decay)
-             TacAddr* effective_base_addr = base_addr;
-             if (base_type->kind == TYPE_ARRAY) {
-                 // The address of the array is its base address.
-                 effective_base_addr = new_temp(create_pointer_type(base_type->data.base_info.base));
-                 emit(TAC_ADDR, effective_base_addr, base_addr, NULL); // Get address if base_addr was just the symbol
-                 final_element_type = base_type; // Start with full array type for offset calc
-             } else if (base_type->kind == TYPE_POINTER) {
-                 // Base address is already the pointer value.
-                 effective_base_addr = base_addr;
-                 final_element_type = base_type; // Start with pointer type for offset calc
-             } else {
-                 fprintf(stderr, "Error line %d: Base of array subscript is not an array or pointer.\n", node->lineno);
-                 // Free subscript_list before returning
-                 while (subscript_list) { ASTNodeList* next = subscript_list->next; free(subscript_list); subscript_list = next; }
-                 return NULL;
-             }
-
-
-            // 3. Calculate the total byte offset using the new recursive function
-            TacAddr* total_offset = calculate_array_offset_recursive_new(base_expr_node, subscript_list, num_subscripts, 0, final_element_type);
-
-             // Update final_element_type based on dimensions applied
-             for(int i=0; i < num_subscripts; ++i) {
-                  if (final_element_type && (final_element_type->kind == TYPE_ARRAY || final_element_type->kind == TYPE_POINTER)) {
-                     final_element_type = final_element_type->data.base_info.base;
-                  } else {
-                      final_element_type = create_type(TYPE_UNKNOWN); // Error occurred
-                      break;
-                  }
-             }
-
-
-            // Free the temporary list used for subscripts
-            while (subscript_list) { ASTNodeList* next = subscript_list->next; free(subscript_list); subscript_list = next; }
-
-            if (!total_offset || !final_element_type || final_element_type->kind == TYPE_UNKNOWN) {
-                 fprintf(stderr, "Error line %d: Failed to calculate array offset or determine element type.\n", node->lineno);
-                 return NULL;
+            // Handle decay: if we have an array type, we need its element type.
+            // If we have a pointer type, we need what it points to.
+            if (base_type->kind == TYPE_ARRAY) {
+                pointed_to_type = base_type->data.base_info.base;
+                
+                // CRITICAL: If base is an array variable (not a pointer yet), 
+                // we need its address to perform arithmetic. 
+                // Unless it's already a decayed pointer (result of previous calculation).
+                // In 3AC, if 'base_addr' is ADDR_VARIABLE (arr), we need &arr.
+                if (base_addr->kind == ADDR_VARIABLE) {
+                    TacAddr* ptr_to_arr = new_temp(create_pointer_type(pointed_to_type));
+                    emit(TAC_ADDR, ptr_to_arr, base_addr, NULL);
+                    base_addr = ptr_to_arr;
+                }
+            } else if (base_type->kind == TYPE_POINTER) {
+                pointed_to_type = base_type->data.base_info.base;
+            } else {
+                fprintf(stderr, "Error line %d: Subscripted value is not array or pointer.\n", node->lineno);
+                return NULL;
             }
 
+            // 2. Calculate Offset = Index * SizeOf(PointedType)
+            int element_size = get_type_size(pointed_to_type);
+            TacAddr* size_node = new_const_int(element_size);
+            
+            TacAddr* offset = new_temp(create_type(TYPE_INT));
+            emit(TAC_MUL, offset, index_val, size_node);
 
-            // 4. Calculate the final element address: effective_base_addr + total_offset
-            TacAddr* element_addr = new_temp(create_pointer_type(final_element_type));
-            emit(TAC_ADD, element_addr, effective_base_addr, total_offset); // element_addr = base + offset
+            // 3. Calculate Address = Base + Offset
+            // The result type is a POINTER to the element type.
+            Type* result_ptr_type = create_pointer_type(pointed_to_type);
+            TacAddr* elem_addr = new_temp(result_ptr_type);
+            emit(TAC_ADD, elem_addr, base_addr, offset);
+
+            // 4. Determine Return Behavior
+            // If the resulting element is ITSELF an array (e.g., arr[0] in int arr[2][2]),
+            // we return the address (it decays).
+            // If it is a primitive, we handle is_lvalue.
+            
+            if (pointed_to_type->kind == TYPE_ARRAY) {
+                // It is an array (e.g., a row in a 2D array). Return the address (decay).
+                // The type remains "Pointer to Array".
+                return elem_addr;
+            }
 
             if (is_lvalue) {
-                return element_addr; // Return the calculated address
+                return elem_addr;
             } else {
-                // Dereference the final address to get the value
-                TacAddr* result = new_temp(final_element_type);
-                emit(TAC_DEREF, result, element_addr, NULL); // result = *element_addr
-                return result;
+                // Dereference to get value
+                TacAddr* val = new_temp(pointed_to_type);
+                emit(TAC_DEREF, val, elem_addr, NULL);
+                return val;
             }
         }
 

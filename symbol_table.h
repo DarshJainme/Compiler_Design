@@ -30,6 +30,8 @@ typedef struct Symbol {
     // for liveliness analysis - next use table
     int next_use; // 3ac instruction line of next use
     bool is_live; // is this variable live?
+
+    bool is_param; // True if this symbol is a function parameter
 } Symbol;
 
 // Represents a single scope (e.g., global, function body)

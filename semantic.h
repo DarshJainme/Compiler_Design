@@ -21,7 +21,7 @@ typedef struct FunctionAnalysisContext {
 
 struct ASTNode;
 void analyze_enum_specifier(struct ASTNode* node);
-void analyze_struct_or_union_specifier(struct ASTNode *node); 
+void analyze_struct_or_union_specifier(struct ASTNode *node);
 
 struct Type *process_enum_specifier(struct ASTNode* node);
 struct Type *process_struct_or_union_specifier(struct ASTNode *node);
