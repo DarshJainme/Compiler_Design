@@ -1298,19 +1298,43 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             free_dead_regs(instr);
             break;
 
-        // --- Assignment ---
         case TAC_ASSIGN: // res = arg1
-            if (is_float_op) {
-                r_arg1 = getFPR(instr, instr->arg1, false);
-                r_res = getFPR(instr, instr->res, true); 
-                mips_emit("mov.s %s, %s", r_res, r_arg1);
-            } else {
-                r_arg1 = getGPR(instr, instr->arg1, false);
-                r_res = getGPR(instr, instr->res, true); 
-                mips_emit("move %s, %s", r_res, r_arg1);
-            }
-            free_dead_regs(instr);
-            break;
+{
+    char locbuf[64];
+
+    if (is_float_op) {
+        r_arg1 = getFPR(instr, instr->arg1, false);
+        r_res  = getFPR(instr, instr->res, true); 
+        mips_emit("mov.s %s, %s", r_res, r_arg1);
+    } else {
+        r_arg1 = getGPR(instr, instr->arg1, false);
+        r_res  = getGPR(instr, instr->res, true); 
+        mips_emit("move %s, %s", r_res, r_arg1);
+    }
+
+    // *** IMPORTANT PART ***
+    // If we're assigning to a variable (local or global),
+    // also immediately update its memory slot.
+    if (instr->res && instr->res->kind == ADDR_VARIABLE) {
+        if (is_float_op) {
+            mips_emit("s.s %s, %s",
+                      r_res,
+                      get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+        } else {
+            mips_emit("sw %s, %s",
+                      r_res,
+                      get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+        }
+        ad_set_var_in_mem(instr->res);
+    }
+
+    free_dead_regs(instr);
+    break;
+}
+
+
+       
+
             
         // --- Integer Arithmetic ---
         case TAC_ADD: 
@@ -1769,61 +1793,27 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
 
 // At the end of a basic block, write all "dirty" registers back to memory.
 static void store_regs_at_block_end(BasicBlock* block) {
-    char loc_buf[64];
     mips_comment("--- End of Basic Block %d ---", block->id);
-    
-    bool is_exit = (block->end->op == TAC_GOTO || block->end->op == TAC_RETURN);
 
-    // --- Spill GPRs ---
+    // Spill all GPRs that hold something.
     for (int i = 0; i < NUM_TEMP_REGS; i++) {
         List* vars_in_reg = temp_reg_desc[i].vars;
         if (list_is_empty(vars_in_reg)) continue;
-        if (is_exit) {
-            spill_gpr(i);
-        } else {
-            for (ListNode* n = list_begin(vars_in_reg); n; n = list_next(n)) {
-                // ... (liveness check is unchanged) ...
-                TacAddr* var = (TacAddr*)list_get_data(n);
-                bool is_live = false;
-                if (var->kind == ADDR_VARIABLE && var->val.var) {
-                    is_live = var->val.var->is_live;
-                } else if (var->kind == ADDR_TEMP && temp_live_info) {
-                    is_live = temp_live_info[var->val.temp_id].is_live;
-                }
-                if (is_live) {
-                    mips_emit("sw %s, %s", temp_reg_names[i], get_mem_loc_str(loc_buf, 64, var));
-                    ad_set_var_in_mem(var);
-                }
-            }
-        }
-        rd_clear_gpr(i); // Clear after block
+
+        spill_gpr(i);       // writes all vars in this reg to memory (if they have a home)
+        rd_clear_gpr(i);    // clear descriptor
     }
-    
-    // --- NEW: Spill FPRs ---
+
+    // Spill all FPRs that hold something.
     for (int i = 0; i < NUM_FLOAT_REGS; i++) {
         List* vars_in_reg = float_reg_desc[i].vars;
         if (list_is_empty(vars_in_reg)) continue;
-        if (is_exit) {
-            spill_fpr(i);
-        } else {
-            for (ListNode* n = list_begin(vars_in_reg); n; n = list_next(n)) {
-                // ... (liveness check is identical) ...
-                TacAddr* var = (TacAddr*)list_get_data(n);
-                bool is_live = false;
-                if (var->kind == ADDR_VARIABLE && var->val.var) {
-                    is_live = var->val.var->is_live;
-                } else if (var->kind == ADDR_TEMP && temp_live_info) {
-                    is_live = temp_live_info[var->val.temp_id].is_live;
-                }
-                if (is_live) {
-                    mips_emit("s.s %s, %s", float_reg_names[i], get_mem_loc_str(loc_buf, 64, var));
-                    ad_set_var_in_mem(var);
-                }
-            }
-        }
-        rd_clear_fpr(i); // Clear after block
+
+        spill_fpr(i);
+        rd_clear_fpr(i);
     }
 }
+
 
 
 /*

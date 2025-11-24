@@ -28,5 +28,5 @@ int main() {
     }
     // The final return value should be 10 + 5 = 15.
     // This verifies the first loop ran correctly and the second was skipped.
-    return counter + another_counter;
+    printf("%d",counter + another_counter);
 }
