@@ -697,6 +697,8 @@ void print_tac() {
         reversed_list = current_sl;
         current_sl = next;
     }
+    // Make reversed_list the canonical list so later emitters (mips.c) see all literals.
+    string_literal_list = reversed_list;
     for (StringLiteral* sl = reversed_list; sl; sl = sl->next) {
          // Escape special characters in the string for .asciiz
          printf("%s: .asciiz \"", sl->label);

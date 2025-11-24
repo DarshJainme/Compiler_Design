@@ -702,6 +702,23 @@ static void mips_emit_data_segment(TacInstr* tac_head) {
         mips_emit("%s: .asciiz \"%s\"", sl->label, sl->value);
     }
 
+    // Ensure all string labels referenced by TAC are emitted (emit placeholder if missing)
+    for (TacInstr* instr = tac_head; instr; instr = instr->next) {
+        TacAddr* addrs[] = { instr->res, instr->arg1, instr->arg2 };
+        for (int i = 0; i < 3; ++i) {
+            TacAddr* a = addrs[i];
+            if (!a || a->kind != ADDR_STRING || !a->val.string_label) continue;
+            bool found = false;
+            for (StringLiteral* sl = string_literal_list; sl; sl = sl->next) {
+                if (sl->label && strcmp(sl->label, a->val.string_label) == 0) { found = true; break; }
+            }
+            if (!found) {
+                // Emit a placeholder so 'la <reg>, <label>' is always valid.
+                mips_emit("%s: .asciiz \"\"  # placeholder (original text missing)", a->val.string_label);
+            }
+        }
+    }
+
     // --- NEW: Add 0.0 float constant for comparisons ---
     mips_emit("f_const_zero: .float 0.0");
     // Emit global variables
