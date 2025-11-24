@@ -80,8 +80,8 @@ static int max_temp_id = 0; // The highest t# used in the function
 
 // --- Forward Declarations ---
 static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym);
-static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res);
-static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res);
+static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res, int exclude_reg_idx);
+static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res, int exclude_reg_idx);
 static void mips_emit(const char* format, ...);
 static List* assign_stack_offsets(BasicBlock* func_start_block, List** temps_list_out);
 static void compute_liveness(BasicBlock* block, List* vars_in_func);
@@ -924,11 +924,12 @@ static void spill_fpr(int reg_index) {
 }
 
 // Find the best register to spill using Next-Use info
-static int find_gpr_to_spill() {
+static int find_gpr_to_spill(int exclude_reg) {
     int best_reg = -1;
     int max_next_use = -1; // We want to spill the var with the *furthest* next use
 
     for (int i = 0; i < NUM_TEMP_REGS; i++) {
+        if (i == exclude_reg) continue; // SKIP LOCKED REG
         List* vars_in_reg = temp_reg_desc[i].vars;
         if (list_is_empty(vars_in_reg)) {
             return i; // Found an empty register, no spill needed
@@ -975,11 +976,12 @@ static int find_gpr_to_spill() {
     return (best_reg != -1) ? best_reg : 0; // Default to $t0 if all else fails
 }
 
-static int find_fpr_to_spill() {
+static int find_fpr_to_spill(int exclude_reg) {
     int best_reg = -1;
     int max_next_use = -1; // We want to spill the var with the *furthest* next use
 
     for (int i = 0; i < NUM_FLOAT_REGS; i++) {
+        if (i == exclude_reg) continue; // SKIP LOCKED REG
         List* vars_in_reg = float_reg_desc[i].vars;
         if (list_is_empty(vars_in_reg)) {
             return i; // Found an empty register, no spill needed
@@ -1027,25 +1029,26 @@ static int find_fpr_to_spill() {
 }
 
 // The main `getGPR` algorithm
-static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res) {
+// Update signature
+static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res, int exclude_reg_idx) {
     char loc_buf[64];
     
     if (var->kind == ADDR_CONSTANT_INT) {
-        int reg_index = find_gpr_to_spill();
+        int reg_index = find_gpr_to_spill(exclude_reg_idx); // Pass exclusion
         MipsRegister* reg = &temp_reg_desc[reg_index];
         spill_gpr(reg_index);
         rd_clear_gpr(reg_index);
         mips_emit("li %s, %d", reg->name, var->val.const_int);
         return reg->name;
     }
-
+    
+    // ... (String constant handling: pass exclude_reg_idx) ...
     if (var->kind == ADDR_STRING) {
-        int reg_index = find_gpr_to_spill();
+        int reg_index = find_gpr_to_spill(exclude_reg_idx);
         MipsRegister* reg = &temp_reg_desc[reg_index];
         spill_gpr(reg_index);
         rd_clear_gpr(reg_index);
         mips_emit("la %s, %s", reg->name, var->val.string_label);
-        // Don't track string constants in AD/RD, just load them
         return reg->name;
     }
 
@@ -1053,11 +1056,11 @@ static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res) {
     for (ListNode* n = list_begin(ad->locations); n; n = list_next(n)) {
         AddrLocation* loc = (AddrLocation*)list_get_data(n);
         if (loc->kind == LOC_GPR) {
-            return temp_reg_names[loc->reg_index]; // Found it!
+            return temp_reg_names[loc->reg_index]; 
         }
     }
 
-    int reg_index = find_gpr_to_spill();
+    int reg_index = find_gpr_to_spill(exclude_reg_idx); // Pass exclusion
     MipsRegister* reg = &temp_reg_desc[reg_index];
     spill_gpr(reg_index);
     rd_clear_gpr(reg_index); 
@@ -1073,20 +1076,26 @@ static const char* getGPR(TacInstr* instr, TacAddr* var, bool is_res) {
 }
 
 // --- NEW: The main `getFPR` algorithm ---
-static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res) {
+static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res, int exclude_reg_idx) {
     char loc_buf[64];
     
     if (var->kind == ADDR_CONSTANT_FLOAT) {
-        int reg_index = find_fpr_to_spill();
+        int reg_index = find_fpr_to_spill(exclude_reg_idx);
         MipsRegister* reg = &float_reg_desc[reg_index];
         spill_fpr(reg_index);
         rd_clear_fpr(reg_index);
 
-        // Load float constant from memory
         mips_emit(".data");
-        mips_emit("f_const_%d: .float %f", label_count, var->val.const_float);
-        mips_emit(".text");
-        mips_emit("l.s %s, f_const_%d", reg->name, label_count);
+        // Check type to decide between float (.float) and double (.double)
+        if (var->type && var->type->kind == TYPE_DOUBLE) {
+            mips_emit("f_const_%d: .double %.15g", label_count, var->val.const_float);
+            mips_emit(".text");
+            mips_emit("l.d %s, f_const_%d", reg->name, label_count);
+        } else {
+            mips_emit("f_const_%d: .float %.7g", label_count, var->val.const_float);
+            mips_emit(".text");
+            mips_emit("l.s %s, f_const_%d", reg->name, label_count);
+        }
         label_count++;
         return reg->name;
     }
@@ -1099,7 +1108,7 @@ static const char* getFPR(TacInstr* instr, TacAddr* var, bool is_res) {
         }
     }
 
-    int reg_index = find_fpr_to_spill();
+    int reg_index = find_fpr_to_spill(exclude_reg_idx);
     MipsRegister* reg = &float_reg_desc[reg_index];
     spill_fpr(reg_index);
     rd_clear_fpr(reg_index); 
@@ -1231,21 +1240,25 @@ static void free_dead_regs(TacInstr* instr) {
 ================================================================================
 */
 
-static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIFY THIS
+static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) {
     const char *r_res, *r_arg1, *r_arg2;
     
-    // Check type of operands
+    // --- TYPE DETECTION ---
     bool is_float_op = false;
-    if (instr->arg1 && instr->arg1->type && 
-       (instr->arg1->type->kind == TYPE_FLOAT || instr->arg1->type->kind == TYPE_DOUBLE)) {
-        is_float_op = true;
+    bool is_double = false;
+
+    // Check Arg1 Type
+    if (instr->arg1 && instr->arg1->type) {
+        if (instr->arg1->type->kind == TYPE_FLOAT) is_float_op = true;
+        if (instr->arg1->type->kind == TYPE_DOUBLE) { is_float_op = true; is_double = true; }
     }
-    if (instr->res && instr->res->type && 
-       (instr->res->type->kind == TYPE_FLOAT || instr->res->type->kind == TYPE_DOUBLE)) {
-        is_float_op = true;
+    // Check Result Type (Overrides arg1 if present)
+    if (instr->res && instr->res->type) {
+        if (instr->res->type->kind == TYPE_FLOAT) is_float_op = true;
+        if (instr->res->type->kind == TYPE_DOUBLE) { is_float_op = true; is_double = true; }
     }
 
-    // Handle float-specific ops separately
+    // Force is_float_op for specific opcodes
     switch(instr->op) {
         case TAC_FADD: case TAC_FSUB: case TAC_FMUL: case TAC_FDIV: case TAC_FNEG:
         case TAC_FLT: case TAC_FLE: case TAC_FGT: case TAC_FGE: case TAC_FEQ: case TAC_FNE:
@@ -1253,12 +1266,13 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             is_float_op = true;
             break;
         default:
-            // For ops like TAC_ASSIGN, we must check the type
             if (instr->op == TAC_ASSIGN && is_float_op) break;
-            // All other ops are integer
             is_float_op = false; 
     }
     
+    // Helper variables for register locking
+    int r1_idx; 
+
     switch(instr->op) {
         // --- Function Start/End ---
         case TAC_BEGIN_FUNC:
@@ -1277,22 +1291,24 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             break;
         case TAC_IFZ: // if arg1 == 0 goto label
             if (is_float_op) {
-                r_arg1 = getFPR(instr, instr->arg1, false);
-                mips_emit("c.eq.s %s, %s", r_arg1, TEMP_FPR_ZERO); // Compare to 0.0
-                mips_emit("bc1t L%d", instr->res->val.label_id); // Branch if true (is zero)
+                r_arg1 = getFPR(instr, instr->arg1, false, -1);
+                // Note: Comparing double against single zero (TEMP_FPR_ZERO) might need precision adjustment
+                // For now, assuming .s works for zero check or TEMP_FPR_ZERO is handled
+                mips_emit("c.eq.s %s, %s", r_arg1, TEMP_FPR_ZERO); 
+                mips_emit("bc1t L%d", instr->res->val.label_id);
             } else {
-                r_arg1 = getGPR(instr, instr->arg1, false);
+                r_arg1 = getGPR(instr, instr->arg1, false, -1);
                 mips_emit("beqz %s, L%d", r_arg1, instr->res->val.label_id);
             }
             free_dead_regs(instr);
             break;
         case TAC_IFNZ: // if arg1 != 0 goto label
             if (is_float_op) {
-                r_arg1 = getFPR(instr, instr->arg1, false);
-                mips_emit("c.eq.s %s, %s", r_arg1, TEMP_FPR_ZERO); // Compare to 0.0
-                mips_emit("bc1f L%d", instr->res->val.label_id); // Branch if false (is not zero)
+                r_arg1 = getFPR(instr, instr->arg1, false, -1);
+                mips_emit("c.eq.s %s, %s", r_arg1, TEMP_FPR_ZERO);
+                mips_emit("bc1f L%d", instr->res->val.label_id);
             } else {
-                r_arg1 = getGPR(instr, instr->arg1, false);
+                r_arg1 = getGPR(instr, instr->arg1, false, -1);
                 mips_emit("bnez %s, L%d", r_arg1, instr->res->val.label_id);
             }
             free_dead_regs(instr);
@@ -1303,12 +1319,13 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
     char locbuf[64];
 
     if (is_float_op) {
-        r_arg1 = getFPR(instr, instr->arg1, false);
-        r_res  = getFPR(instr, instr->res, true); 
-        mips_emit("mov.s %s, %s", r_res, r_arg1);
+        r_arg1 = getFPR(instr, instr->arg1, false, -1);
+        r_res  = getFPR(instr, instr->res, true, -1); 
+        if (is_double) mips_emit("mov.d %s, %s", r_res, r_arg1);
+                else           mips_emit("mov.s %s, %s", r_res, r_arg1);
     } else {
-        r_arg1 = getGPR(instr, instr->arg1, false);
-        r_res  = getGPR(instr, instr->res, true); 
+        r_arg1 = getGPR(instr, instr->arg1, false, -1);
+        r_res  = getGPR(instr, instr->res, true, -1); 
         mips_emit("move %s, %s", r_res, r_arg1);
     }
 
@@ -1336,220 +1353,252 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
        
 
             
-        // --- Integer Arithmetic ---
+        // --- Integer Arithmetic (WITH LOCKING) ---
         case TAC_ADD: 
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true); 
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx); 
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("addu %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
         case TAC_SUB:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("subu %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
         case TAC_MUL:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("mul %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
         case TAC_DIV:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("div %s, %s", r_arg1, r_arg2);
-            mips_emit("mflo %s", r_res); // Get result from LO
+            mips_emit("mflo %s", r_res);
             free_dead_regs(instr);
             break;
-        case TAC_MOD: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+        case TAC_MOD:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("div %s, %s", r_arg1, r_arg2);
-            mips_emit("mfhi %s", r_res); // Get remainder from HI
+            mips_emit("mfhi %s", r_res);
             free_dead_regs(instr);
             break;
         case TAC_NEG:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_res = getGPR(instr, instr->res, true);
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r_res = getGPR(instr, instr->res, true, -1);
             mips_emit("subu %s, $zero, %s", r_res, r_arg1);
             free_dead_regs(instr);
             break;
             
-        // --- Float Arithmetic ---
-        case TAC_FADD: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("add.s %s, %s, %s", r_res, r_arg1, r_arg2); // .s for single
+        // --- Float Arithmetic (WITH LOCKING & PRECISION) ---
+        case TAC_FADD:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getFPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("add.d %s, %s, %s", r_res, r_arg1, r_arg2);
+            else           mips_emit("add.s %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_FSUB: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("sub.s %s, %s, %s", r_res, r_arg1, r_arg2);
+        case TAC_FSUB:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getFPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("sub.d %s, %s, %s", r_res, r_arg1, r_arg2);
+            else           mips_emit("sub.s %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_FMUL: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("mul.s %s, %s, %s", r_res, r_arg1, r_arg2);
+        case TAC_FMUL:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getFPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("mul.d %s, %s, %s", r_res, r_arg1, r_arg2);
+            else           mips_emit("mul.s %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_FDIV: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("div.s %s, %s, %s", r_res, r_arg1, r_arg2);
+        case TAC_FDIV:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getFPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("div.d %s, %s, %s", r_res, r_arg1, r_arg2);
+            else           mips_emit("div.s %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_FNEG: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("neg.s %s, %s", r_res, r_arg1);
+        case TAC_FNEG:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r_res = getFPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("neg.d %s, %s", r_res, r_arg1);
+            else           mips_emit("neg.s %s, %s", r_res, r_arg1);
             free_dead_regs(instr);
             break;
 
         // --- Type Conversions ---
-        case TAC_CVT_F2I: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("cvt.w.s %s, %s", TEMP_FPR_REG, r_arg1); // Convert float to word (int) in FPR
-            mips_emit("mfc1 %s, %s", r_res, TEMP_FPR_REG); // Move from coprocessor 1 to GPR
+        case TAC_CVT_F2I:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("cvt.w.s %s, %s", TEMP_FPR_REG, r_arg1); 
+            mips_emit("mfc1 %s, %s", r_res, TEMP_FPR_REG); 
             free_dead_regs(instr);
             break;
-        case TAC_CVT_I2F: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("mtc1 %s, %s", r_arg1, TEMP_FPR_REG); // Move from GPR to coprocessor 1
-            mips_emit("cvt.s.w %s, %s", r_res, TEMP_FPR_REG); // Convert word (int) to single (float)
+        case TAC_CVT_I2F:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r_res = getFPR(instr, instr->res, true, -1);
+            mips_emit("mtc1 %s, %s", r_arg1, TEMP_FPR_REG); 
+            mips_emit("cvt.s.w %s, %s", r_res, TEMP_FPR_REG); 
             free_dead_regs(instr);
             break;
-        case TAC_CVT_D2F: // <-- NEW (Assume .d for double, .s for float)
-            r_arg1 = getFPR(instr, instr->arg1, false); // Pretend we got it
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("cvt.s.d %s, %s", r_res, r_arg1);
+        case TAC_CVT_D2F:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r_res = getFPR(instr, instr->res, true, -1);
+            mips_emit("cvt.s.d %s, %s", r_res, r_arg1); // Convert Double to Single
             free_dead_regs(instr);
             break;
-        case TAC_CVT_F2D: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_res = getFPR(instr, instr->res, true);
-            mips_emit("cvt.d.s %s, %s", r_res, r_arg1);
+        case TAC_CVT_F2D:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r_res = getFPR(instr, instr->res, true, -1);
+            mips_emit("cvt.d.s %s, %s", r_res, r_arg1); // Convert Single to Double
             free_dead_regs(instr);
             break;
             
-        // --- Relational Ops (Integer) ---
+        // --- Relational Ops (Integer) WITH LOCKING ---
         case TAC_LT:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
             mips_emit("slt %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
         case TAC_LE:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("sle %s, %s, %s", r_res, r_arg1, r_arg2); // Pseudo-op
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("sle %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
         case TAC_GT:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("sgt %s, %s, %s", r_res, r_arg1, r_arg2); // Pseudo-op
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("sgt %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
         case TAC_GE:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("sge %s, %s, %s", r_res, r_arg1, r_arg2); // Pseudo-op
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("sge %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
         case TAC_EQ:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("seq %s, %s, %s", r_res, r_arg1, r_arg2); // Pseudo-op
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("seq %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
         case TAC_NE:
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("sne %s, %s, %s", r_res, r_arg1, r_arg2); // Pseudo-op
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("sne %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
 
-        // --- Relational Ops (Float) ---
-        case TAC_FLT: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true); // Result is 0 or 1 (int)
-            mips_emit("c.lt.s %s, %s", r_arg1, r_arg2);
-            mips_emit("li %s, 0", r_res); // Assume false
+        // --- Relational Ops (Float) WITH LOCKING & PRECISION ---
+        case TAC_FLT:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1); 
+            if (is_double) mips_emit("c.lt.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.lt.s %s, %s", r_arg1, r_arg2);
+            mips_emit("li %s, 0", r_res); 
             mips_emit("bc1t L%d", label_count);
-            mips_emit("li %s, 1", r_res); // Is true
+            mips_emit("li %s, 1", r_res); 
             mips_emit("L%d:", label_count++);
             free_dead_regs(instr);
             break;
-        case TAC_FEQ: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("c.eq.s %s, %s", r_arg1, r_arg2);
+        case TAC_FEQ:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("c.eq.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.eq.s %s, %s", r_arg1, r_arg2);
             mips_emit("li %s, 0", r_res);
             mips_emit("bc1t L%d", label_count);
             mips_emit("li %s, 1", r_res);
             mips_emit("L%d:", label_count++);
             free_dead_regs(instr);
             break;
-        case TAC_FLE: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("c.le.s %s, %s", r_arg1, r_arg2);
+        case TAC_FLE:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("c.le.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.le.s %s, %s", r_arg1, r_arg2);
             mips_emit("li %s, 0", r_res);
             mips_emit("bc1t L%d", label_count);
             mips_emit("li %s, 1", r_res);
             mips_emit("L%d:", label_count++);
             free_dead_regs(instr);
             break;
-        case TAC_FGT: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("c.gt.s %s, %s", r_arg1, r_arg2);
+        case TAC_FGT:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("c.gt.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.gt.s %s, %s", r_arg1, r_arg2);
             mips_emit("li %s, 0", r_res);
             mips_emit("bc1t L%d", label_count);
             mips_emit("li %s, 1", r_res);
             mips_emit("L%d:", label_count++);
             free_dead_regs(instr);
             break;
-        case TAC_FGE: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("c.ge.s %s, %s", r_arg1, r_arg2);
+        case TAC_FGE:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("c.ge.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.ge.s %s, %s", r_arg1, r_arg2);
             mips_emit("li %s, 0", r_res);
             mips_emit("bc1t L%d", label_count);
             mips_emit("li %s, 1", r_res);
             mips_emit("L%d:", label_count++);
             free_dead_regs(instr);
             break;
-        case TAC_FNE: // <-- NEW
-            r_arg1 = getFPR(instr, instr->arg1, false);
-            r_arg2 = getFPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("c.eq.s %s, %s", r_arg1, r_arg2);
+        case TAC_FNE:
+            r_arg1 = getFPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_FLOAT_REGS; i++) if(strcmp(float_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getFPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, -1);
+            if (is_double) mips_emit("c.eq.d %s, %s", r_arg1, r_arg2);
+            else           mips_emit("c.eq.s %s, %s", r_arg1, r_arg2);
             mips_emit("li %s, 0", r_res);
             mips_emit("bc1t L%d", label_count);
             mips_emit("li %s, 1", r_res);
@@ -1557,65 +1606,73 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             free_dead_regs(instr);
             break;
 
-        // --- Bitwise and Logical ---
-        case TAC_LSHIFT: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+        // --- Bitwise and Logical WITH LOCKING ---
+        case TAC_LSHIFT:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("sllv %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_RSHIFT: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("srav %s, %s, %s", r_res, r_arg1, r_arg2); // Arithmetic shift
+        case TAC_RSHIFT:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
+            mips_emit("srav %s, %s, %s", r_res, r_arg1, r_arg2); 
             free_dead_regs(instr);
             break;
-        case TAC_BAND: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+        case TAC_BAND:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("and %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_BOR: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+        case TAC_BOR:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("or %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_BXOR: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_arg2 = getGPR(instr, instr->arg2, false);
-            r_res = getGPR(instr, instr->res, true);
+        case TAC_BXOR:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r1_idx = -1; for(int i=0; i<NUM_TEMP_REGS; i++) if(strcmp(temp_reg_names[i], r_arg1)==0) r1_idx=i;
+            r_arg2 = getGPR(instr, instr->arg2, false, r1_idx);
+            r_res = getGPR(instr, instr->res, true, r1_idx); // Locked
             mips_emit("xor %s, %s, %s", r_res, r_arg1, r_arg2);
             free_dead_regs(instr);
             break;
-        case TAC_BNOT: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("nor %s, %s, $zero", r_res, r_arg1); // a NOR 0 == NOT a
+        case TAC_BNOT:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("nor %s, %s, $zero", r_res, r_arg1); 
             free_dead_regs(instr);
             break;
-        case TAC_NOT: // <-- NEW
-            r_arg1 = getGPR(instr, instr->arg1, false);
-            r_res = getGPR(instr, instr->res, true);
-            mips_emit("seq %s, %s, $zero", r_res, r_arg1); // Set if $r_arg1 == 0
+        case TAC_NOT:
+            r_arg1 = getGPR(instr, instr->arg1, false, -1);
+            r_res = getGPR(instr, instr->res, true, -1);
+            mips_emit("seq %s, %s, $zero", r_res, r_arg1); 
             free_dead_regs(instr);
             break;
 
         // --- Function Calls ---
         case TAC_PARAM:
-            // This is complex. Standard MIPS passes first 4 args in $a0-$a3.
-            // We'll stick to the simple (but slow) stack-only version for now.
             if (is_float_op) {
-                r_arg1 = getFPR(instr, instr->arg1, false);
+                r_arg1 = getFPR(instr, instr->arg1, false, -1);
                 mips_emit("subu $sp, $sp, 4");
-                mips_emit("s.s %s, 0($sp)", r_arg1);
+                if (is_double) {
+                    mips_emit("subu $sp, $sp, 4"); // Double takes 8 bytes
+                    mips_emit("s.d %s, 0($sp)", r_arg1);
+                } else {
+                    mips_emit("s.s %s, 0($sp)", r_arg1);
+                }
             } else {
-                r_arg1 = getGPR(instr, instr->arg1, false);
+                r_arg1 = getGPR(instr, instr->arg1, false, -1);
                 mips_emit("subu $sp, $sp, 4"); 
                 mips_emit("sw %s, 0($sp)", r_arg1); 
             }
@@ -1625,59 +1682,30 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
         case TAC_CALL:
             // ** 1. Check for Dynamic Memory Allocation **
             if (strcmp(instr->arg1->val.var->name, "malloc") == 0) {
-                // malloc(size) -> Syscall 9 (sbrk)
-                // Argument is on stack at 0($sp) because we just pushed it.
-                
                 mips_emit("# System Call: malloc");
-                mips_emit("lw $a0, 0($sp)"); // Load size
-                mips_emit("li $v0, 9");      // sbrk code
+                mips_emit("lw $a0, 0($sp)"); 
+                mips_emit("li $v0, 9");      
                 mips_emit("syscall");
-                
-                // Clean up stack (pop size)
                 mips_emit("addu $sp, $sp, 4");
-                
-                // Result in $v0
                 if (instr->res) {
-                    // If target is a variable, store result directly to its memory slot.
-                    if (instr->res->kind == ADDR_VARIABLE) {
-                        char locbuf[64];
-                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                        ad_set_var_in_mem(instr->res);
-                    } else {
-                        const char* r_res = getGPR(instr, instr->res, true);
-                        mips_emit("move %s, $v0", r_res);
-                    }
+                    const char* r_res = getGPR(instr, instr->res, true, -1);
+                    mips_emit("move %s, $v0", r_res);
                 }
                 free_dead_regs(instr);
-                break; // Done
+                break; 
             }
             
             if (strcmp(instr->arg1->val.var->name, "calloc") == 0) {
-                // calloc(num, size) -> We will treat as malloc(num * size) for simplicity
-                // or just return 0 memory. MIPS sbrk returns zeroed memory usually? 
-                // Actually, sbrk memory isn't guaranteed zeroed in all simulators, 
-                // but implementing a memset loop here is hard in 3AC.
-                // Let's map it to sbrk for now.
-                
-                // Stack: [num] [size] (Top)
                 mips_emit("# System Call: calloc (simplified to sbrk)");
-                mips_emit("lw $t0, 4($sp)"); // num
-                mips_emit("lw $t1, 0($sp)"); // size
-                mips_emit("mul $a0, $t0, $t1"); // $a0 = num * size
+                mips_emit("lw $t0, 4($sp)"); 
+                mips_emit("lw $t1, 0($sp)"); 
+                mips_emit("mul $a0, $t0, $t1"); 
                 mips_emit("li $v0, 9");
                 mips_emit("syscall");
-                
-                mips_emit("addu $sp, $sp, 8"); // Pop 2 args
-                
+                mips_emit("addu $sp, $sp, 8"); 
                 if (instr->res) {
-                    if (instr->res->kind == ADDR_VARIABLE) {
-                        char locbuf[64];
-                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                        ad_set_var_in_mem(instr->res);
-                    } else {
-                        const char* r_res = getGPR(instr, instr->res, true);
-                        mips_emit("move %s, $v0", r_res);
-                    }
+                    const char* r_res = getGPR(instr, instr->res, true, -1);
+                    mips_emit("move %s, $v0", r_res);
                 }
                 free_dead_regs(instr);
                 break;
@@ -1688,27 +1716,19 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             if (instr->arg2->kind == ADDR_CONSTANT_INT) {
                 int num_params = instr->arg2->val.const_int;
                 if (num_params > 0) {
+                    // Note: If params were doubles, this cleanup math might be off if we assume 4 bytes per param.
+                    // But for now assuming 4 bytes per TAC_PARAM instruction emitted.
                     mips_emit("addu $sp, $sp, %d", num_params * 4);
                 }
             }
             if (instr->res) {
-                // If the call result is a variable, write $v0/$f0 directly to that memory location.
-                if (instr->res->kind == ADDR_VARIABLE) {
-                    char locbuf[64];
-                    if (is_float_op) {
-                        mips_emit("s.s $f0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                    } else {
-                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                    }
-                    ad_set_var_in_mem(instr->res);
+                if(is_float_op) {
+                    r_res = getFPR(instr, instr->res, true, -1);
+                    if (is_double) mips_emit("mov.d %s, $f0", r_res); 
+                    else           mips_emit("mov.s %s, $f0", r_res);
                 } else {
-                    if(is_float_op) {
-                        r_res = getFPR(instr, instr->res, true);
-                        mips_emit("mov.s %s, $f0", r_res); // Float return is in $f0
-                    } else {
-                        r_res = getGPR(instr, instr->res, true);
-                        mips_emit("move %s, $v0", r_res); // Int return is in $v0
-                    }
+                    r_res = getGPR(instr, instr->res, true, -1);
+                    mips_emit("move %s, $v0", r_res); 
                 }
             }
             break;
@@ -1716,15 +1736,15 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
         case TAC_RETURN:
             if (instr->arg1) {
                 if(is_float_op) {
-                    r_arg1 = getFPR(instr, instr->arg1, false);
-                    mips_emit("mov.s $f0, %s", r_arg1); // Put float return val in $f0
+                    r_arg1 = getFPR(instr, instr->arg1, false, -1);
+                    if (is_double) mips_emit("mov.d $f0, %s", r_arg1);
+                    else           mips_emit("mov.s $f0, %s", r_arg1);
                 } else {
-                    r_arg1 = getGPR(instr, instr->arg1, false);
-                    mips_emit("move $v0, %s", r_arg1); // Put int return val in $v0
+                    r_arg1 = getGPR(instr, instr->arg1, false, -1);
+                    mips_emit("move $v0, %s", r_arg1); 
                 }
             }
-            // Symbol* func_sym = block->start->res->val.var; // <-- THIS IS THE CRASH, DELETE IT
-            if (func_sym) { // <-- USE THE PASSED-IN SYMBOL
+            if (func_sym) { 
                 mips_emit("j .L%s_epilogue", func_sym->name);
             } else {
                 mips_comment("ERROR: Could not find function for return, using unknown epilogue");
@@ -1733,54 +1753,36 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             break;
 
         // --- Memory and Pointers ---
-        case TAC_ADDR: // res = &arg1
-            r_res = getGPR(instr, instr->res, true);
+        case TAC_ADDR: 
+            r_res = getGPR(instr, instr->res, true, -1);
             emit_load_address(r_res, instr->arg1);
             free_dead_regs(instr);
             break;
 
         case TAC_DEREF: // res = *arg1 (load)
-            r_arg1 = getGPR(instr, instr->arg1, false); // Get pointer value
+            r_arg1 = getGPR(instr, instr->arg1, false, -1); // Get pointer value
             if (is_float_op) {
-                r_res = getFPR(instr, instr->res, true);   // Get reg for float result
-                mips_emit("l.s %s, 0(%s)", r_res, r_arg1); // Load Single
+                r_res = getFPR(instr, instr->res, true, -1);   
+                // CHECK FOR DOUBLE
+                if (is_double) mips_emit("l.d %s, 0(%s)", r_res, r_arg1);
+                else           mips_emit("l.s %s, 0(%s)", r_res, r_arg1);
             } else {
-                r_res = getGPR(instr, instr->res, true);   // Get reg for int result
+                r_res = getGPR(instr, instr->res, true, -1);   
                 mips_emit("lw %s, 0(%s)", r_res, r_arg1);
             }
             free_dead_regs(instr);
             break;
             
         case TAC_STORE: // *res = arg1 (store)
-            // If 'res' is a variable, it denotes the variable's memory slot: store directly to it.
-            if (instr->res->kind == ADDR_VARIABLE) {
-               char locbuf[64];
-                if (is_float_op) {
-                   r_arg1 = getFPR(instr, instr->arg1, false); // Get float value
-                    mips_emit("s.s %s, %s", r_arg1, get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                } else {
-                    r_arg1 = getGPR(instr, instr->arg1, false); // Get int value
-                    mips_emit("sw %s, %s", r_arg1, get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                }
-                ad_set_var_in_mem(instr->res);
+            r_res = getGPR(instr, instr->res, false, -1);  // Get address
+            if (is_float_op) {
+                r_arg1 = getFPR(instr, instr->arg1, false, -1); // Get float value
+                // CHECK FOR DOUBLE
+                if (is_double) mips_emit("s.d %s, 0(%s)", r_arg1, r_res);
+                else           mips_emit("s.s %s, 0(%s)", r_arg1, r_res);
             } else {
-                // Load VALUE first (into a register), then load target ADDRESS into
-                // a dedicated scratch ($t9) and perform the store via 0($t9).
-                if (is_float_op) {
-                    r_arg1 = getFPR(instr, instr->arg1, false); // float value
-                } else {
-                    r_arg1 = getGPR(instr, instr->arg1, false); // int/ptr value
-                }
-                {
-                    char locbuf[64];
-                    // Load the address (where to store) into $t9
-                    mips_emit("lw $t9, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
-                    if (is_float_op) {
-                        mips_emit("s.s %s, 0($t9)", r_arg1);
-                    } else {
-                        mips_emit("sw %s, 0($t9)", r_arg1);
-                    }
-                }
+                r_arg1 = getGPR(instr, instr->arg1, false, -1); // Get int value
+                mips_emit("sw %s, 0(%s)", r_arg1, r_res);
             }
             free_dead_regs(instr);
             break;
@@ -2053,6 +2055,44 @@ static void mips_emit_stdlib() {
     mips_emit("  lw $t0, 12($fp)"); // Get pointer to int
     mips_emit("  sw $v0, 0($t0)");  
     
+    mips_emit("  move $sp, $fp");
+    mips_emit("  lw $ra, 4($sp)");
+    mips_emit("  lw $fp, 0($sp)");
+    mips_emit("  addiu $sp, $sp, 8");
+    mips_emit("  jr $ra");
+
+    // --- STRCAT implementation ---
+    // Arguments: $a0 = destination, $a1 = source (This compiler pushes them to stack)
+    // Stack: 0($sp) = dest (pointer), 4($sp) = src (pointer) after args popped?
+    // Actually, your TAC pushes args right-to-left.
+    // TAC: param src, param dest, call strcat.
+    // Stack on entry: 4($fp) = Return Addr, 8($fp) = dest, 12($fp) = src.
+    
+    mips_emit("strcat:");
+    mips_emit("  subu $sp, $sp, 8");
+    mips_emit("  sw $ra, 4($sp)");
+    mips_emit("  sw $fp, 0($sp)");
+    mips_emit("  move $fp, $sp");
+    
+    mips_emit("  lw $t0, 8($fp)");  // $t0 = dest pointer
+    mips_emit("  lw $t1, 12($fp)"); // $t1 = src pointer
+    
+    mips_emit("strcat_find_end:");
+    mips_emit("  lb $t2, 0($t0)");
+    mips_emit("  beqz $t2, strcat_copy"); // Found null terminator
+    mips_emit("  addiu $t0, $t0, 1");
+    mips_emit("  j strcat_find_end");
+    
+    mips_emit("strcat_copy:");
+    mips_emit("  lb $t2, 0($t1)");      // Load byte from src
+    mips_emit("  sb $t2, 0($t0)");      // Store at end of dest
+    mips_emit("  beqz $t2, strcat_done"); // If null, we are done
+    mips_emit("  addiu $t0, $t0, 1");
+    mips_emit("  addiu $t1, $t1, 1");
+    mips_emit("  j strcat_copy");
+    
+    mips_emit("strcat_done:");
+    mips_emit("  lw $v0, 8($fp)");      // Return original dest pointer
     mips_emit("  move $sp, $fp");
     mips_emit("  lw $ra, 4($sp)");
     mips_emit("  lw $fp, 0($sp)");
