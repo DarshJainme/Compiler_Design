@@ -1614,8 +1614,15 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
                 
                 // Result in $v0
                 if (instr->res) {
-                    const char* r_res = getGPR(instr, instr->res, true);
-                    mips_emit("move %s, $v0", r_res);
+                    // If target is a variable, store result directly to its memory slot.
+                    if (instr->res->kind == ADDR_VARIABLE) {
+                        char locbuf[64];
+                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                        ad_set_var_in_mem(instr->res);
+                    } else {
+                        const char* r_res = getGPR(instr, instr->res, true);
+                        mips_emit("move %s, $v0", r_res);
+                    }
                 }
                 free_dead_regs(instr);
                 break; // Done
@@ -1639,8 +1646,14 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
                 mips_emit("addu $sp, $sp, 8"); // Pop 2 args
                 
                 if (instr->res) {
-                    const char* r_res = getGPR(instr, instr->res, true);
-                    mips_emit("move %s, $v0", r_res);
+                    if (instr->res->kind == ADDR_VARIABLE) {
+                        char locbuf[64];
+                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                        ad_set_var_in_mem(instr->res);
+                    } else {
+                        const char* r_res = getGPR(instr, instr->res, true);
+                        mips_emit("move %s, $v0", r_res);
+                    }
                 }
                 free_dead_regs(instr);
                 break;
@@ -1655,12 +1668,23 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
                 }
             }
             if (instr->res) {
-                if(is_float_op) {
-                    r_res = getFPR(instr, instr->res, true);
-                    mips_emit("mov.s %s, $f0", r_res); // Float return is in $f0
+                // If the call result is a variable, write $v0/$f0 directly to that memory location.
+                if (instr->res->kind == ADDR_VARIABLE) {
+                    char locbuf[64];
+                    if (is_float_op) {
+                        mips_emit("s.s $f0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                    } else {
+                        mips_emit("sw $v0, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                    }
+                    ad_set_var_in_mem(instr->res);
                 } else {
-                    r_res = getGPR(instr, instr->res, true);
-                    mips_emit("move %s, $v0", r_res); // Int return is in $v0
+                    if(is_float_op) {
+                        r_res = getFPR(instr, instr->res, true);
+                        mips_emit("mov.s %s, $f0", r_res); // Float return is in $f0
+                    } else {
+                        r_res = getGPR(instr, instr->res, true);
+                        mips_emit("move %s, $v0", r_res); // Int return is in $v0
+                    }
                 }
             }
             break;
@@ -1704,13 +1728,35 @@ static void gen_mips_for_instr(TacInstr* instr, Symbol* func_sym) { // <-- MODIF
             break;
             
         case TAC_STORE: // *res = arg1 (store)
-            r_res = getGPR(instr, instr->res, false);  // Get address
-            if (is_float_op) {
-                r_arg1 = getFPR(instr, instr->arg1, false); // Get float value
-                mips_emit("s.s %s, 0(%s)", r_arg1, r_res); // Store Single
+            // If 'res' is a variable, it denotes the variable's memory slot: store directly to it.
+            if (instr->res->kind == ADDR_VARIABLE) {
+               char locbuf[64];
+                if (is_float_op) {
+                   r_arg1 = getFPR(instr, instr->arg1, false); // Get float value
+                    mips_emit("s.s %s, %s", r_arg1, get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                } else {
+                    r_arg1 = getGPR(instr, instr->arg1, false); // Get int value
+                    mips_emit("sw %s, %s", r_arg1, get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                }
+                ad_set_var_in_mem(instr->res);
             } else {
-                r_arg1 = getGPR(instr, instr->arg1, false); // Get int value
-                mips_emit("sw %s, 0(%s)", r_arg1, r_res);
+                // Load VALUE first (into a register), then load target ADDRESS into
+                // a dedicated scratch ($t9) and perform the store via 0($t9).
+                if (is_float_op) {
+                    r_arg1 = getFPR(instr, instr->arg1, false); // float value
+                } else {
+                    r_arg1 = getGPR(instr, instr->arg1, false); // int/ptr value
+                }
+                {
+                    char locbuf[64];
+                    // Load the address (where to store) into $t9
+                    mips_emit("lw $t9, %s", get_mem_loc_str(locbuf, sizeof locbuf, instr->res));
+                    if (is_float_op) {
+                        mips_emit("s.s %s, 0($t9)", r_arg1);
+                    } else {
+                        mips_emit("sw %s, 0($t9)", r_arg1);
+                    }
+                }
             }
             free_dead_regs(instr);
             break;
