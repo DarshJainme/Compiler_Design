@@ -516,9 +516,46 @@ TacAddr* new_var_addr(Symbol* sym) {
 
 // Manage string literals
 TacAddr* new_string_addr(char* string_value) {
+    if (!string_value) return NULL;
+
+    // Strip surrounding quotes if present
+    int len = strlen(string_value);
+    int start = 0, end = len;
+    if (len >= 2 && string_value[0] == '"' && string_value[len - 1] == '"') {
+        start = 1;
+        end = len - 1;
+    }
+
+    // Unescape sequences into a new buffer (store actual characters)
+    char* buf = (char*)malloc(end - start + 1 + 16); // a bit extra for safety
+    if (!buf) return NULL;
+    int j = 0;
+    for (int i = start; i < end; ++i) {
+        char c = string_value[i];
+        if (c == '\\' && i + 1 < end) {
+            ++i;
+            char esc = string_value[i];
+            switch (esc) {
+                case 'n': buf[j++] = '\n'; break;
+                case 't': buf[j++] = '\t'; break;
+                case 'r': buf[j++] = '\r'; break;
+                case '\\': buf[j++] = '\\'; break;
+                case '"': buf[j++] = '"'; break;
+                case '0': buf[j++] = '\0'; break;
+                default: buf[j++] = esc; break;
+                // unknown escape -> keep char
+            }
+        } else {
+            buf[j++] = c;
+        }
+    }
+    buf[j] = '\0';
+
     // Check if this string already exists
+    // compare unescaped content
     for (StringLiteral* sl = string_literal_list; sl; sl = sl->next) {
-        if (strcmp(sl->value, string_value) == 0) {
+        if (sl->value && strcmp(sl->value, buf) == 0) {
+            free(buf);
             TacAddr* addr = (TacAddr*)calloc(1, sizeof(TacAddr));
             addr->kind = ADDR_STRING;
             addr->val.string_label = strdup(sl->label);
@@ -533,7 +570,7 @@ TacAddr* new_string_addr(char* string_value) {
 
     StringLiteral* new_sl = (StringLiteral*)malloc(sizeof(StringLiteral));
     new_sl->label = strdup(label_buf);
-    new_sl->value = strdup(string_value); // Store the actual string content
+    new_sl->value = buf; // ownership transferred
     new_sl->next = string_literal_list;
     string_literal_list = new_sl;
 
@@ -674,7 +711,7 @@ void print_tac() {
          }
          printf("\"\n");
     }
-    string_literal_list = NULL;
+    // keep string_literal_list so generate_mips() can emit the same literals
 
 
     printf("\n--- Three-Address Code (Text Segment) ---\n");
@@ -2080,7 +2117,8 @@ void gen_tac_for_node(ASTNode* node) {
                 scope = scope->parent;
             }
             
-            emit(TAC_RETURN, retval, NULL, NULL);
+            // TAC_RETURN expects arg1 to hold retval
+            emit(TAC_RETURN,NULL, retval, NULL);
             break;
         }
 
